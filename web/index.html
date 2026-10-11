@@ -30,6 +30,7 @@
   --star:#f2c03c;--shadow:none;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--link)}
@@ -196,7 +197,7 @@ function karta(b) {
     b.km != null && `<span class="f">${esc(b.km)} km od Zoo</span>`,
     b.metro_m && `<span class="f">metro ${esc(b.metro_m)} m</span>`,
     b.patro != null && `<span class="f">${esc(b.patro)}. patro</span>`,
-    b.vybaveni && `<span class="f">vybavení: ${esc(b.vybaveni)}</span>`,
+    b.vybaveni && !b.vybaveni.startsWith("-") && `<span class="f">vybavení: ${esc(b.vybaveni)}</span>`,
     b.od && `<span class="f">volné od ${esc(datum(b.od))}</span>`,
     b.kauce && `<span class="f">kauce ${esc(kc(b.kauce))}</span>`,
     `<span class="f src">${esc(b.zdroj)}${b.vlozeno ? " · vloženo " + esc(datum(b.vlozeno)) : ""}</span>`,
