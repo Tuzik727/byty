@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Byty 2+kk Praha</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{
+  --bg:#f5f4f0;--card:#fff;--text:#1d2228;--muted:#69717b;--line:#e2e0da;
+  --accent:#2f6b4f;--accent-soft:#e3efe8;--link:#1f5fa8;
+  --red:#b3261e;--red-soft:#fbe4e1;--orange:#9a5a00;--orange-soft:#fdeccc;
+  --green:#2f6b4f;--green-soft:#dcefe3;--yellow-soft:#fff4c2;--yellow:#7a6100;
+  --star:#e0a100;--shadow:0 1px 2px rgba(0,0,0,.05),0 2px 8px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#15181b;--card:#1e2226;--text:#e7e9eb;--muted:#9aa2ab;--line:#30363c;
+  --accent:#7cc39c;--accent-soft:#1f3329;--link:#82b4f0;
+  --red:#ff9d94;--red-soft:#3b2120;--orange:#f3bd6a;--orange-soft:#3a2c14;
+  --green:#7cc39c;--green-soft:#1f3329;--yellow-soft:#3a3315;--yellow:#e8d27a;
+  --star:#f2c03c;--shadow:none;
+}}
+:root[data-theme="dark"]{
+  --bg:#15181b;--card:#1e2226;--text:#e7e9eb;--muted:#9aa2ab;--line:#30363c;
+  --accent:#7cc39c;--accent-soft:#1f3329;--link:#82b4f0;
+  --red:#ff9d94;--red-soft:#3b2120;--orange:#f3bd6a;--orange-soft:#3a2c14;
+  --green:#7cc39c;--green-soft:#1f3329;--yellow-soft:#3a3315;--yellow:#e8d27a;
+  --star:#f2c03c;--shadow:none;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--link)}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+header{padding:22px 0 10px}
+h1{font-size:24px;margin:0 0 4px;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:14px}
+.bar{position:sticky;top:0;z-index:1000;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--line)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.row+.row{margin-top:8px}
+input[type=search],select{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 10px;min-height:38px}
+input[type=search]{flex:1 1 220px;min-width:0}
+.rng{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:4px 10px;min-height:38px}
+.rng b{color:var(--text);min-width:58px;display:inline-block;text-align:right;font-variant-numeric:tabular-nums}
+.rng input{width:110px;accent-color:var(--accent)}
+.chip{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:999px;padding:6px 12px;cursor:pointer;min-height:36px}
+.chip[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+.tabs{display:flex;gap:4px;margin-left:auto}
+.count{color:var(--muted);font-size:14px;margin:12px 0 4px}
+.list{display:grid;gap:12px;padding:8px 0 40px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow);display:grid;grid-template-columns:1fr auto;gap:4px 14px}
+.card.hidden{opacity:.5}
+.card.fav{border-color:var(--star);box-shadow:0 0 0 1px var(--star)}
+.title{font-weight:600;font-size:16px;text-decoration:none}
+.title:hover{text-decoration:underline}
+.addr{color:var(--muted);font-size:14px}
+.price{text-align:right;white-space:nowrap}
+.price .total{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.price .parts{font-size:13px;color:var(--muted)}
+.price .drop{font-size:12px;color:var(--green);font-weight:600}
+.facts{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.f{font-size:13px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 8px;white-space:nowrap}
+.f.new{background:var(--accent);border-color:var(--accent);color:var(--card);font-weight:700}
+.f.src{color:var(--muted)}
+.warn{grid-column:1/-1;display:grid;gap:4px;margin-top:6px}
+.w{font-size:13px;border-radius:6px;padding:4px 8px}
+.w.red{background:var(--red-soft);color:var(--red)}
+.w.orange{background:var(--orange-soft);color:var(--orange)}
+.w.green{background:var(--green-soft);color:var(--green)}
+.w.yellow{background:var(--yellow-soft);color:var(--yellow)}
+.actions{grid-column:1/-1;display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.btn{font:inherit;font-size:14px;background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:5px 10px;cursor:pointer;min-height:34px}
+.btn.on{color:var(--star);border-color:var(--star);font-weight:600}
+details{grid-column:1/-1;margin-top:4px}
+summary{cursor:pointer;color:var(--muted);font-size:14px}
+.popis{white-space:pre-wrap;font-size:14px;margin:8px 0 0;max-height:320px;overflow:auto;padding-right:6px}
+#map{height:calc(100vh - 200px);min-height:420px;border-radius:12px;border:1px solid var(--line);margin:12px 0 40px}
+.empty{text-align:center;color:var(--muted);padding:40px 0}
+.pin{width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.leaflet-popup-content{font:14px/1.4 system-ui,sans-serif}
+@media (max-width:640px){
+  .card{grid-template-columns:1fr}
+  .price{text-align:left}
+  .tabs{margin-left:0}
+  h1{font-size:21px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Byty 2+kk v Praze</h1>
+    <div class="sub" id="sub">Načítám…</div>
+  </header>
+</div>
+<div class="bar"><div class="wrap">
+  <div class="row">
+    <input type="search" id="q" placeholder="Hledat (ulice, čtvrť, slovo v popisu)…" aria-label="Hledat">
+    <label class="rng">Do <b id="cenaV"></b><input type="range" id="cena" min="12000" max="22000" step="500"></label>
+    <label class="rng">Do <b id="kmV"></b><input type="range" id="km" min="1" max="12" step="0.5"></label>
+    <select id="sort" aria-label="Řadit">
+      <option value="km">Nejblíž k Zoo</option>
+      <option value="cena">Nejlevnější</option>
+      <option value="nove">Nejnovější</option>
+      <option value="plocha">Největší</option>
+    </select>
+  </div>
+  <div class="row">
+    <button class="chip" data-f="nove" aria-pressed="false">Jen nové</button>
+    <button class="chip" data-f="fav" aria-pressed="false">★ Oblíbené</button>
+    <button class="chip" data-f="kouri" aria-pressed="false">Skrýt „zákaz kouření“</button>
+    <button class="chip" data-f="dva" aria-pressed="false">Skrýt „max. 2 osoby“</button>
+    <button class="chip" data-f="skryte" aria-pressed="false">Ukázat skryté</button>
+    <div class="tabs">
+      <button class="chip" data-view="list" aria-pressed="true">Seznam</button>
+      <button class="chip" data-view="map" aria-pressed="false">Mapa</button>
+    </div>
+  </div>
+</div></div>
+<main class="wrap">
+  <div class="count" id="count"></div>
+  <div class="list" id="list"></div>
+  <div id="map" hidden></div>
+</main>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+const kc = n => n == null ? "?" : Math.round(n).toLocaleString("cs-CZ") + " Kč";
+const datum = s => { if (!s) return ""; const [y, m, d] = s.slice(0, 10).split("-"); return `${+d}. ${+m}. ${y}`; };
+const ted = () => { const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+
+let favs = new Set(store.get("byty.fav", [])), hid = new Set(store.get("byty.hid", []));
+const f = Object.assign({nove: false, fav: false, kouri: false, dva: false, skryte: false, view: "list", sort: "km"},
+                        store.get("byty.filtr", {}));
+let DATA = null, map = null, layer = null;
+
+// "Nové" = poprvé viděné od minulé návštěvy (pauza > 3 h), napoprvé za posledních 48 h.
+const nyni = ted(), posledni = store.get("byty.posledni", null);
+let hranice = store.get("byty.hranice", null);
+if (!posledni || Date.now() - new Date(posledni.replace(" ", "T")) > 3 * 3600e3) hranice = posledni;
+store.set("byty.hranice", hranice);
+store.set("byty.posledni", nyni);
+
+function jeNovy(b, aktualizovano) {
+  if (hranice) return b.prvni_videni > hranice;
+  return new Date(aktualizovano.replace(" ", "T")) - new Date(b.prvni_videni.replace(" ", "T")) <= 48 * 3600e3;
+}
+
+function varovani(b) {
+  const out = [];
+  for (const radek of (b.varovani || "").split("\n").filter(Boolean)) {
+    const cls = radek.startsWith("Zákaz kouření") ? "red" : radek.startsWith("Asi max. 2") ? "orange"
+              : radek.startsWith("Kouření OK") ? "green" : "yellow";
+    out.push({cls, text: radek});
+  }
+  if (b.popl == null) out.push({cls: "yellow", text: "Poplatky neuvedeny – ověřit"});
+  else if (b.popl_info && b.popl_info !== "z inzerátu") out.push({cls: "yellow", text: "Poplatky " + b.popl_info});
+  return out;
+}
+
+function filtrovane() {
+  const q = $("#q").value.trim().toLowerCase(), maxC = +$("#cena").value, maxK = +$("#km").value;
+  let r = DATA.byty.filter(b => {
+    if ((b.celkem ?? b.cena ?? 0) > maxC) return false;
+    if (b.km != null && b.km > maxK) return false;
+    if (!f.skryte && hid.has(b.id)) return false;
+    if (f.fav && !favs.has(b.id)) return false;
+    if (f.nove && !b._novy) return false;
+    if (f.kouri && /^Zákaz kouření/m.test(b.varovani || "")) return false;
+    if (f.dva && /^Asi max\. 2/m.test(b.varovani || "")) return false;
+    if (q && !`${b.nazev} ${b.adresa} ${b.popis || ""}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const cena = b => b.celkem ?? b.cena ?? 1e9;
+  const cmp = {
+    km: (a, b) => (a.km ?? 99) - (b.km ?? 99) || cena(a) - cena(b),
+    cena: (a, b) => cena(a) - cena(b),
+    nove: (a, b) => (b.prvni_videni + (b.vlozeno || "")).localeCompare(a.prvni_videni + (a.vlozeno || "")),
+    plocha: (a, b) => (b.plocha ?? 0) - (a.plocha ?? 0),
+  }[f.sort];
+  return r.sort(cmp);
+}
+
+function karta(b) {
+  const fakta = [
+    b._novy && `<span class="f new">NOVÉ</span>`,
+    b.plocha && `<span class="f">${esc(b.plocha)} m²</span>`,
+    b.km != null && `<span class="f">${esc(b.km)} km od Zoo</span>`,
+    b.metro_m && `<span class="f">metro ${esc(b.metro_m)} m</span>`,
+    b.patro != null && `<span class="f">${esc(b.patro)}. patro</span>`,
+    b.vybaveni && `<span class="f">vybavení: ${esc(b.vybaveni)}</span>`,
+    b.od && `<span class="f">volné od ${esc(datum(b.od))}</span>`,
+    b.kauce && `<span class="f">kauce ${esc(kc(b.kauce))}</span>`,
+    `<span class="f src">${esc(b.zdroj)}${b.vlozeno ? " · vloženo " + esc(datum(b.vlozeno)) : ""}</span>`,
+  ].filter(Boolean).join("");
+  const warn = varovani(b).map(w => `<div class="w ${w.cls}">${esc(w.text)}</div>`).join("");
+  const total = b.celkem ?? b.cena;
+  return `<article class="card${favs.has(b.id) ? " fav" : ""}${hid.has(b.id) ? " hidden" : ""}" data-id="${esc(b.id)}">
+    <div><a class="title" href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.nazev)}</a>
+      <div class="addr">${esc(b.adresa || "")}</div></div>
+    <div class="price"><div class="total">${kc(total)}${b.celkem == null ? " + ?" : ""}</div>
+      <div class="parts">${b.celkem != null ? `nájem ${kc(b.cena)} + poplatky ${kc(b.popl)}` : "nájem bez poplatků"}</div>
+      ${b.cena_puvodni && b.cena_puvodni > b.cena ? `<div class="drop">↓ zlevněno z ${kc(b.cena_puvodni)}</div>` : ""}
+      ${b.cena_puvodni && b.cena_puvodni < b.cena ? `<div class="parts">dřív ${kc(b.cena_puvodni)}</div>` : ""}</div>
+    <div class="facts">${fakta}</div>
+    ${warn ? `<div class="warn">${warn}</div>` : ""}
+    ${b.popis || b.pozn_cena ? `<details><summary>Popis</summary><div class="popis">${b.pozn_cena ? "Pozn. k ceně: " + esc(b.pozn_cena) + "\n\n" : ""}${esc(b.popis || "")}</div></details>` : ""}
+    <div class="actions">
+      <button class="btn${favs.has(b.id) ? " on" : ""}" data-act="fav">${favs.has(b.id) ? "★ Oblíbený" : "☆ Oblíbit"}</button>
+      <button class="btn" data-act="hid">${hid.has(b.id) ? "Zobrazit" : "Skrýt"}</button>
+      <a class="btn" href="https://mapy.cz/zakladni?q=${encodeURIComponent(b.adresa || "")}${b.lat ? `&x=${b.lon}&y=${b.lat}&z=16` : ""}" target="_blank" rel="noopener" style="text-decoration:none">Mapy.cz</a>
+    </div>
+  </article>`;
+}
+
+function barva(b) { return favs.has(b.id) ? "#e0a100" : b._novy ? "#2f6b4f" : "#4a78b5"; }
+
+function kresliMapu(rows) {
+  if (!window.L) { $("#map").textContent = "Mapu se nepodařilo načíst."; return; }
+  if (!map) {
+    map = L.map("map").setView(DATA.prace, 12);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      {maxZoom: 19, attribution: "© OpenStreetMap"}).addTo(map);
+    L.marker(DATA.prace, {title: "Zoo Praha"}).addTo(map).bindPopup("<b>Zoo Praha / práce</b>");
+    if (DATA.max_km) L.circle(DATA.prace, {radius: DATA.max_km * 1000, color: "#2f6b4f", weight: 1, fill: false, dashArray: "4 6"}).addTo(map);
+    layer = L.layerGroup().addTo(map);
+  }
+  layer.clearLayers();
+  for (const b of rows) {
+    if (b.lat == null) continue;
+    const icon = L.divIcon({className: "", html: `<div class="pin" style="background:${barva(b)}"></div>`, iconSize: [14, 14]});
+    L.marker([b.lat, b.lon], {icon}).addTo(layer).bindPopup(
+      `<a href="${esc(b.url)}" target="_blank" rel="noopener"><b>${esc(b.nazev)}</b></a><br>${esc(b.adresa || "")}<br>` +
+      `<b>${kc(b.celkem ?? b.cena)}</b>${b.celkem == null ? " + poplatky ?" : ""} · ${esc(b.km ?? "?")} km`);
+  }
+  setTimeout(() => map.invalidateSize(), 0);
+}
+
+function render() {
+  $("#cenaV").textContent = kc(+$("#cena").value);
+  $("#kmV").textContent = (+$("#km").value).toLocaleString("cs-CZ") + " km";
+  document.querySelectorAll("[data-f]").forEach(b => b.setAttribute("aria-pressed", f[b.dataset.f]));
+  document.querySelectorAll("[data-view]").forEach(b => b.setAttribute("aria-pressed", f.view === b.dataset.view));
+  $("#sort").value = f.sort;
+  if (!DATA) return;
+  const rows = filtrovane(), bezGps = rows.filter(b => b.lat == null).length;
+  $("#count").textContent = `${rows.length} z ${DATA.byty.length} bytů` +
+    (f.view === "map" && bezGps ? ` · ${bezGps} bez polohy na mapě chybí` : "");
+  $("#list").hidden = f.view !== "list";
+  $("#map").hidden = f.view !== "map";
+  if (f.view === "list") $("#list").innerHTML = rows.length ? rows.map(karta).join("") : `<div class="empty">Nic neodpovídá filtrům.</div>`;
+  else kresliMapu(rows);
+}
+
+function ulozFiltr() {
+  store.set("byty.filtr", {...f, cena: +$("#cena").value, km: +$("#km").value});
+  render();
+}
+
+document.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { f[b.dataset.f] = !f[b.dataset.f]; ulozFiltr(); });
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { f.view = b.dataset.view; ulozFiltr(); });
+$("#sort").onchange = e => { f.sort = e.target.value; ulozFiltr(); };
+$("#cena").oninput = $("#km").oninput = ulozFiltr;
+$("#q").oninput = render;
+$("#list").onclick = e => {
+  const btn = e.target.closest("[data-act]"); if (!btn) return;
+  const id = btn.closest(".card").dataset.id, set = btn.dataset.act === "fav" ? favs : hid;
+  set.has(id) ? set.delete(id) : set.add(id);
+  store.set("byty.fav", [...favs]); store.set("byty.hid", [...hid]);
+  render();
+};
+
+render();
+fetch("byty.json", {cache: "no-cache"}).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => {
+  DATA = d;
+  for (const b of d.byty) b._novy = jeNovy(b, d.aktualizovano);
+  const novych = d.byty.filter(b => b._novy).length;
+  $("#cena").max = d.max_cena;
+  $("#km").max = d.max_km || 25;
+  $("#cena").value = Math.min(f.cena ?? d.max_cena, d.max_cena);
+  $("#km").value = Math.min(f.km ?? $("#km").max, $("#km").max);
+  $("#sub").textContent = `Pronájem do ${kc(d.max_cena)} včetně poplatků (pro ${d.osob} osoby), do ${d.max_km} km od Zoo · ` +
+    `Sreality, Bezrealitky, Bazoš · aktualizováno ${datum(d.aktualizovano)} ${d.aktualizovano.slice(11)}` +
+    (novych ? ` · ${novych} nových ${hranice ? "od minulé návštěvy" : "za 48 h"}` : "");
+  render();
+}).catch(e => { $("#sub").textContent = "Data se nepodařilo načíst (" + e.message + ")."; });
+</script>
+</body>
+</html>
