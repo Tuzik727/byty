@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["web/index.html"]
+    paths: ["web/**"]
 
 permissions:
   contents: write
@@ -20,6 +20,7 @@ concurrency:
 jobs:
   hledej:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -32,17 +33,29 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
+      # Databáze a data webu žijí ve větvi "data" (jen poslední verze, bez historie),
+      # aby se repo nenafukovalo binárkou při každém běhu.
+      - name: Načíst data
+        run: |
+          if git fetch --depth=1 origin data; then
+            git show origin/data:byty.db > byty.db
+            git show origin/data:byty.json > web/byty.json
+          fi
       - name: Stáhnout byty
         if: github.event_name != 'push'
         run: python -X utf8 hledej_byty.py
-      - name: Uložit databázi
+      - name: Uložit data
         if: github.event_name != 'push'
         run: |
+          d=$(mktemp -d)
+          cp byty.db web/byty.json "$d"
+          cd "$d"
+          git init -q -b data
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add byty.db web/byty.json
-          git diff --cached --quiet || git commit -m "Aktualizace bytů $(date '+%Y-%m-%d %H:%M')"
-          git pull --rebase && git push
+          git add -A
+          git commit -qm "Data $(date '+%Y-%m-%d %H:%M')"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

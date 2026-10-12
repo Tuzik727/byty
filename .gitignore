@@ -2,3 +2,5 @@ __pycache__/
 *.xlsx
 .~lock*
 log.txt
+byty.db
+web/byty.json

@@ -1,11 +1,13 @@
 """
-Hledač bytů: Sreality + Bezrealitky + Bazoš -> web/byty.json (+ byty.xlsx)
+Hledač bytů: pronájmy bytů v Praze ze Sreality, Bezrealitek a Bazoše -> web/byty.json
 
 Spuštění:  python hledej_byty.py
-Každé spuštění stáhne aktuální nabídky, porovná je s databází (byty.db),
-zapíše data pro webový přehled (web/index.html čte web/byty.json)
-a lokálně i Excel s listy "Nové" (poprvé viděné při tomto běhu) a "Všechny" (aktivní).
-Na GitHubu (proměnná CI) se Excel nevytváří.
+Každé spuštění stáhne aktuální nabídky, porovná je s databází (byty.db) a zapíše
+data pro web (web/index.html čte web/byty.json). Filtrování dělá až web.
+
+Popisy inzerátů se neukládají ani nezveřejňují – z popisu se při stažení jen
+vyčtou fakta (poplatky, kouření, zvířata, provize…).
+BYTY_LIMIT=N omezí počet inzerátů na zdroj (pro rychlý test).
 """
 import json
 import math
@@ -20,37 +22,21 @@ from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # ---------------------------------------------------------------- NASTAVENÍ --
-MAX_CENA = 22_000            # nájem VČETNĚ poplatků, Kč (nájem samotný taky nesmí být vyšší)
-POCET_OSOB = 3               # poplatky uvedené "za osobu" se násobí tímto číslem
-MAX_VZDALENOST_KM = 12       # vzdušnou čarou od práce; None = celá Praha
-PRACE = (50.1185, 14.4100)   # Zoo Praha / Botanická zahrada, Troja
 PAUZA_S = 0.7                # pauza mezi požadavky na detail (šetrnost k webům)
+DETAIL_V = 2                 # verze rozboru detailu; zvýšení = znovu stáhnout detaily
+LIMIT = int(os.environ.get("BYTY_LIMIT") or 0) or None
 
 SLOZKA = Path(__file__).resolve().parent
 DB_SOUBOR = SLOZKA / "byty.db"
-EXCEL_SOUBOR = SLOZKA / "byty.xlsx"
 LOG_SOUBOR = SLOZKA / "log.txt"
 WEB_JSON = SLOZKA / "web" / "byty.json"
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
-
-# Fráze v popisu, které stojí za pozornost (hledá se v textu bez diakritiky).
-VAROVANI = {
-    "Zákaz kouření": r"nekur|nekour|zakaz\w* koureni|koureni\w* (je )?(zakaz|neni povol|neni mozn)"
-                     r"|nelze kourit|bez koureni|non-?smok",
-    "Kouření OK": r"kuraci? (vitan|povolen|ok)|koureni (je )?(povoleno|mozne)",
-    "Asi max. 2 osoby": r"(max\.?|maximalne|nejvyse|idealne|pouze|jen) ?(pro )?(1\s*[-–]\s*2|2|dve|dva|jednu|1) "
-                        r"?(osob|lid|najemnik)|pro (jednu|1|1\s*[-–]\s*2) osob|\bpro (par|pary)\b"
-                        r"|(vhodn\w*|ideal\w*) (pro|i pro) (par|jednotliv)",
-    "Bez zvířat": r"bez (domacich )?(zvirat|mazlick)|zvirata (ne|nejsou)|zakaz zvirat",
-}
 
 
 def log(msg):
@@ -71,30 +57,58 @@ def session():
 
 def bez_diakritiky(text):
     t = unicodedata.normalize("NFKD", text or "").lower()
-    return "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", "".join(c for c in t if not unicodedata.combining(c)))
 
 
-def vzdalenost_km(lat, lon):
-    if lat is None or lon is None:
-        return None
-    la1, lo1, la2, lo2 = map(math.radians, (PRACE[0], PRACE[1], lat, lon))
-    a = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
-    return round(6371 * 2 * math.asin(math.sqrt(a)), 1)
+def dispozice(text):
+    """'Pronájem bytu 2+kk 54 m²' -> '2+kk'. Garsoniéra se počítá jako 1+kk."""
+    t = bez_diakritiky(text)
+    m = re.search(r"\b([1-9])\s*(?:\+\s*(kk|1)|(kk))\b", t)          # "2+kk", "2 + 1", "3kk"
+    if m:
+        return f"{m.group(1)}+{m.group(2) or m.group(3)}"
+    if re.search(r"garson", t):
+        return "1+kk"
+    if re.search(r"\bpokoj\b|spolubydl", t):
+        return "pokoj"
+    return None
 
 
-def v_dosahu(km):
-    return MAX_VZDALENOST_KM is None or km is None or km <= MAX_VZDALENOST_KM
+# ------------------------------------------------------ ROZBOR TEXTU POPISU --
+# Hledá se v textu bez diakritiky. Výsledek je True / False / None (= nezmíněno).
+def _je(vzor, t):
+    return re.search(vzor, t) is not None
 
 
-def najdi_varovani(text):
-    t = re.sub(r"\s+", " ", bez_diakritiky(text))
-    nalezy = []
-    for nazev, vzor in VAROVANI.items():
-        m = re.search(vzor, t)
-        if m:
-            a, b = max(0, m.start() - 30), min(len(t), m.end() + 30)
-            nalezy.append(f"{nazev}: „…{t[a:b].strip()}…“")
-    return "\n".join(nalezy)
+def rozbor(text):
+    t = bez_diakritiky(text)
+    r = {}
+    if _je(r"nekur|nekour|zakaz\w* koureni|koureni\w* (je )?(zakaz|neni povol|neni mozn)"
+           r"|nelze kourit|bez koureni|non-?smok", t):
+        r["koureni"] = False
+    elif _je(r"kuraci? (vitan|povolen|ok)|koureni (je )?(povoleno|mozne)", t):
+        r["koureni"] = True
+    if _je(r"(max\.?|maximalne|nejvyse|idealne|pouze|jen) ?(pro )?(1\s*[-–]\s*2|2|dve|dva|jednu|1) "
+           r"?(osob|lid|najemnik)|pro (jednu|1|1\s*[-–]\s*2) osob|\bpro (par|pary)\b"
+           r"|(vhodn\w*|ideal\w*) (pro|i pro) (par|jednotliv)", t):
+        r["max2"] = True
+    if _je(r"bez (domacich )?(zvirat|mazlick)|zvirata (ne|nejsou)|zakaz zvirat|nechovat zvir", t):
+        r["zvirata"] = False
+    elif _je(r"(zvirat\w*|mazlic\w*|pejsk\w*|psi) (jsou |je )?(vitan|povolen|mozn|ok|po dohode)"
+             r"|pet.?friendly|vhodn\w* (i )?pro (majitel\w* )?(psa|zvir|mazlick)", t):
+        r["zvirata"] = True
+    if _je(r"bez provize|provize (se )?neplati|zadna provize|0 ?% provize|neplatite provizi", t):
+        r["provize"] = False
+    elif _je(r"provize", t):
+        r["provize"] = True
+    if _je(r"kratkodob|short.?term|airbnb", t):
+        r["kratkodobe"] = True
+    if _je(r"bez vytahu|vytah ne\b|neni vytah", t):
+        r["vytah"] = False
+    elif _je(r"\bvytah", t):
+        r["vytah"] = True
+    if _je(r"balkon|balkon|terasa|terasou|lodzi|lodzie", t) and not _je(r"bez (balkonu|terasy|lodzie)", t):
+        r["venku"] = True
+    return r
 
 
 CASTKA = re.compile(r"(?<![\d.,/])(\d{1,2}[ .]\d{3}|\d{3,5})(?![\d]|[.,]\d)")
@@ -106,7 +120,7 @@ ZA_OSOBU = re.compile(r"^\W*(kc|czk)?\W*(mes\w*\W*)?(poplat\w* |sluzb\w* )?(/|na
 PRO_N_OSOB = re.compile(r"(\b[12] ?os|jedn\w* osob|dve osob|dva lid)")
 
 
-def _najdi_castku(t, klic, r, vynech=None):
+def _najdi_castku(t, klic, cena, vynech=None):
     """První částka v rozumném rozsahu, která stojí u klíčového slova (za ním, nebo těsně před ním)."""
     for m in CASTKA.finditer(t):
         if vynech is not None and m.start() == vynech:
@@ -121,41 +135,45 @@ def _najdi_castku(t, klic, r, vynech=None):
             continue
         kc = int(re.sub(r"\D", "", m.group(1)))
         ma_kc = re.match(r"\s*(,-+)?\s*(kc|czk|,-)", za)
-        if (not 300 <= kc <= 15_000 or kc == r["cena"] or JEDNOTKA_NE.match(za)
+        if (not 300 <= kc <= 15_000 or kc == cena or JEDNOTKA_NE.match(za)
                 or (1900 <= kc <= 2100 and not ma_kc)):
             continue
         return m, kc, pred, za
     return None
 
 
-def odhad_poplatku(r):
-    """Vrátí (poplatky Kč za měsíc pro POCET_OSOB, popis zdroje). Poplatky None = neznámé."""
-    if r["poplatky"]:
-        return r["poplatky"], "z inzerátu"
-    for text in (r["pozn_cena"], r["popis"]):
-        t = re.sub(r"\s+", " ", bez_diakritiky(text))
-        nalez = _najdi_castku(t, KLIC_SLUZBY, r)
+def odhad_poplatku(cena, *texty):
+    """Vyčte poplatky z textu. Vrátí dict popl / popl_os (částka je za osobu) / popl_info."""
+    for text in texty:
+        t = bez_diakritiky(text)
+        nalez = _najdi_castku(t, KLIC_SLUZBY, cena)
         if not nalez:
             continue
         m, kc, pred, za = nalez
-        info = "vyčteno z textu"
+        r = dict(popl=kc, popl_os=False, popl_info="vyčteno z popisu")
         if ZA_OSOBU.match(za):
-            kc, info = kc * POCET_OSOB, f"vyčteno z textu, {kc} Kč/osoba × {POCET_OSOB}"
-        else:
-            n = PRO_N_OSOB.search(pred[-30:] + za[:30])
-            if n:
-                info = f"vyčteno z textu – uvedeno „{n.group(1)}“, pro {POCET_OSOB} bude víc"
+            r.update(popl_os=True, popl_info="vyčteno z popisu, uvedeno za osobu")
+        elif PRO_N_OSOB.search(pred[-30:] + za[:30]):
+            r["popl_info"] = "vyčteno z popisu, uvedeno pro 1–2 osoby"
         # Elektřina uvedená zvlášť (ne "včetně elektřiny") se přičte.
-        el = _najdi_castku(t, KLIC_ELEKTRINA, r, vynech=m.start())
-        if el and not re.search(r"vcet\w* (el|energ)", el[2][-30:]) and el[1] <= 5_000:
-            kc += el[1]
-            info += f" + elektřina {el[1]}"
-        return kc, info
-    return None, "poplatky neuvedeny – ověřit"
+        el = _najdi_castku(t, KLIC_ELEKTRINA, cena, vynech=m.start())
+        if el and not re.search(r"vcet\w* (el|energ)", el[2][-30:]) and el[1] <= 5_000 and not r["popl_os"]:
+            r["popl"] += el[1]
+            r["popl_info"] += f" + elektřina {el[1]} Kč"
+        return r
+    return dict(popl=None, popl_info="poplatky neuvedeny")
 
 
 def ts_datum(unix):
     return datetime.fromtimestamp(unix).strftime("%Y-%m-%d") if unix else None
+
+
+def ano_ne(nazev):
+    return {"ano": True, "ne": False}.get(bez_diakritiky(nazev or "").strip())
+
+
+def nazev_z(x):
+    return (x or {}).get("name") if isinstance(x, dict) else x
 
 
 # ---------------------------------------------------------------- SREALITY --
@@ -164,8 +182,8 @@ def sreality(s, zname):
     vysledky, offset, celkem = [], 0, None
     while celkem is None or offset < celkem:
         r = s.get(f"{api}/search", timeout=30, params=dict(
-            category_main_cb=1, category_type_cb=2, category_sub_cb=4, locality_region_id=10,
-            price_to=MAX_CENA, limit=100, offset=offset, sort="-date"))
+            category_main_cb=1, category_type_cb=2, locality_region_id=10,
+            limit=100, offset=offset, sort="-date"))
         r.raise_for_status()
         d = r.json()
         celkem = d["pagination"]["total"]
@@ -173,36 +191,50 @@ def sreality(s, zname):
             break
         vysledky += d["results"]
         offset += len(d["results"])
+        if LIMIT and len(vysledky) >= LIMIT:
+            vysledky = vysledky[:LIMIT]
+            break
 
     out = []
     for e in vysledky:
         loc = e.get("locality") or {}
-        km = vzdalenost_km(loc.get("gps_lat"), loc.get("gps_lon"))
-        if not v_dosahu(km):
-            continue
         hid = str(e["hash_id"])
+        disp = nazev_z(e.get("category_sub_cb")) or ""
+        metro = e.get("poi_metro_distance")
         b = dict(
             id=f"sreality:{hid}", zdroj="Sreality",
-            url=f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{hid}",
-            nazev=e.get("advert_name"), cena=e.get("price_czk"),
+            url=f"https://www.sreality.cz/detail/pronajem/byt/"
+                f"{disp.lower() if re.fullmatch(r'\d\+(kk|1)|pokoj', disp.lower()) else 'atypicky'}/praha/{hid}",
+            dispozice=dispozice(disp) or dispozice(e.get("advert_name")),
+            cena=e.get("price_czk"),
             adresa=", ".join(x for x in (loc.get("street"), loc.get("citypart"), loc.get("district")) if x),
-            lat=loc.get("gps_lat"), lon=loc.get("gps_lon"), km=km,
-            metro_m=e.get("poi_metro_distance"),
+            lat=loc.get("gps_lat"), lon=loc.get("gps_lon"),
+            metro_m=metro if metro and metro < 100_000 else None,   # 100000 = neznámo
+            rk=bool(e.get("premise_id")),
         )
         if hid not in zname:          # detail jen u nových inzerátů
             time.sleep(PAUZA_S)
             try:
                 dt = s.get(f"{api}/{hid}", timeout=30).json()["result"]
+                popis = dt.get("advert_description") or ""
+                pozn = " ".join(str(x) for x in (dt.get("price_note"), dt.get("cost_of_living")) if x)
+                rb = rozbor(pozn + " " + popis)
+                patro = dt.get("floor_number")
                 b.update(
                     plocha=dt.get("usable_area") or dt.get("floor_area"),
-                    patro=dt.get("floor_number"),
-                    vybaveni=(dt.get("furnished") or {}).get("name"),
+                    patro=patro - 1 if isinstance(patro, int) else None,  # Sreality: přízemí = 1
+                    vybaveni={"Ano": True, "Ne": False, "Částečně": "částečně"}.get(nazev_z(dt.get("furnished"))),
                     kauce=dt.get("refundable_deposit"),
                     od=dt.get("ready_date"),
-                    pozn_cena=" ".join(str(x) for x in (dt.get("price_note"), dt.get("cost_of_living")) if x),
                     vlozeno=dt.get("since"),
-                    varovani=najdi_varovani(dt.get("advert_description")),
-                    popis=dt.get("advert_description"),
+                    koureni=rb.get("koureni"), max2=rb.get("max2"), zvirata=rb.get("zvirata"),
+                    kratkodobe=rb.get("kratkodobe"),
+                    provize=False if dt.get("tenant_not_pay_commission") else rb.get("provize"),
+                    vytah=ano_ne(nazev_z(dt.get("elevator"))) if ano_ne(nazev_z(dt.get("elevator"))) is not None
+                    else rb.get("vytah"),
+                    venku=bool(dt.get("balcony") or dt.get("loggia") or dt.get("terrace")) or rb.get("venku"),
+                    detail_v=DETAIL_V,
+                    **odhad_poplatku(b["cena"], pozn, popis),
                 )
             except Exception as ex:  # noqa: BLE001
                 log(f"  Sreality detail {hid} selhal: {ex}")
@@ -212,12 +244,12 @@ def sreality(s, zname):
 
 # ------------------------------------------------------------- BEZREALITKY --
 BZ_QUERY = """query($offset:Int){ listAdverts(offerType:[PRONAJEM], estateType:[BYT],
-  disposition:[DISP_2_KK], priceTo:%d, regionOsmIds:["R435514"], currency:CZK,
-  limit:60, offset:$offset, order:TIMEORDER_DESC){
-  totalCount list{ id uri surface price charges deposit etage equipped availableFrom
-  gps{lat lng} address(locale:CS) roommate reserved description } } }""" % MAX_CENA
+  regionOsmIds:["R435514"], currency:CZK, limit:60, offset:$offset, order:TIMEORDER_DESC){
+  totalCount list{ id uri disposition surface price charges deposit etage equipped availableFrom
+  timeActivated gps{lat lng} address(locale:CS) roommate reserved description lift petFriendly
+  balconySurface terraceSurface loggiaSurface shortTerm originalPrice } } }"""
 
-VYBAVENI_BZ = {"VYBAVENY": "Ano", "CASTECNE": "Částečně", "NEVYBAVENY": "Ne"}
+VYBAVENI_BZ = {"VYBAVENY": True, "CASTECNE": "částečně", "NEVYBAVENY": False}
 
 
 def bezrealitky(s, zname):
@@ -236,27 +268,43 @@ def bezrealitky(s, zname):
             if a.get("roommate"):
                 continue
             gps = a.get("gps") or {}
-            km = vzdalenost_km(gps.get("lat"), gps.get("lng"))
-            if not v_dosahu(km):
-                continue
-            out.append(dict(
+            rb = rozbor(a.get("description"))
+            disp = (a.get("disposition") or "").replace("DISP_", "").replace("_KK", "+kk").replace("_1", "+1")
+            b = dict(
                 id=f"bezrealitky:{a['id']}", zdroj="Bezrealitky",
                 url=f"https://www.bezrealitky.cz/nemovitosti-byty-domy/{a['uri']}",
-                nazev=f"Pronájem bytu 2+kk {a.get('surface') or ''} m²" + (" (REZERVOVÁNO)" if a.get("reserved") else ""),
-                cena=a.get("price"), poplatky=a.get("charges"), plocha=a.get("surface"),
-                adresa=a.get("address"), lat=gps.get("lat"), lon=gps.get("lng"), km=km,
-                patro=a.get("etage"), vybaveni=VYBAVENI_BZ.get(a.get("equipped"), a.get("equipped")),
+                dispozice=dispozice(disp) or ("1+kk" if disp == "GARSONIERA" else None),
+                cena=a.get("price"), plocha=a.get("surface"),
+                adresa=a.get("address"), lat=gps.get("lat"), lon=gps.get("lng"),
+                patro=a.get("etage"), vybaveni=VYBAVENI_BZ.get(a.get("equipped")),
                 kauce=a.get("deposit"), od=ts_datum(a.get("availableFrom")),
-                varovani=najdi_varovani(a.get("description")), popis=a.get("description"),
-            ))
+                vlozeno=ts_datum(a.get("timeActivated")),
+                rk=False, rezervovano=bool(a.get("reserved")),
+                koureni=rb.get("koureni"), max2=rb.get("max2"),
+                zvirata=True if a.get("petFriendly") else rb.get("zvirata"),
+                kratkodobe=True if a.get("shortTerm") else rb.get("kratkodobe"),
+                provize=False,
+                vytah=True if a.get("lift") else rb.get("vytah"),
+                venku=bool(a.get("balconySurface") or a.get("terraceSurface") or a.get("loggiaSurface"))
+                or rb.get("venku"),
+                cena_puvodni=a.get("originalPrice") if (a.get("originalPrice") or 0) > (a.get("price") or 0)
+                else None,
+                detail_v=DETAIL_V,
+            )
+            if a.get("charges"):          # 0 = nevyplněno, ne "zdarma"
+                b.update(popl=a["charges"], popl_os=False, popl_info="z inzerátu")
+            else:
+                b.update(odhad_poplatku(b["cena"], a.get("description")))
+            out.append(b)
+        if LIMIT and len(out) >= LIMIT:
+            break
     return out
 
 
 # ------------------------------------------------------------------ BAZOŠ --
 def bazos(s, zname):
     base = "https://reality.bazos.cz"
-    params = dict(hledat="2+kk", hlokalita="17100", cenado=MAX_CENA,
-                  humkreis=(MAX_VZDALENOST_KM or 25) + 3)
+    params = dict(hledat="", hlokalita="12000", humkreis=20)   # 120 00 = Praha 2, kruh přes celou Prahu
     out, offset = [], 0
     while True:
         cesta = "/pronajmu/byt/" + (f"{offset}/" if offset else "")
@@ -268,22 +316,22 @@ def bazos(s, zname):
         if not inz:
             break
         for i in inz:
+            lok = i.select_one("div.inzeratylok").get_text(" ", strip=True)
+            if "praha" not in bez_diakritiky(lok):
+                continue
             a = i.select_one("h2.nadpis a")
             nazev = a.get_text(strip=True)
-            if not re.search(r"2\s*\+?\s*kk", nazev, re.I):
-                continue
             m = re.search(r"/inzerat/(\d+)/", a["href"])
             if not m:
                 continue
             bid = m.group(1)
             cena_txt = i.select_one("div.inzeratycena").get_text(" ", strip=True)
             cena = int(re.sub(r"\D", "", cena_txt)) if re.search(r"\d", cena_txt) else None
-            lok = i.select_one("div.inzeratylok").get_text(" ", strip=True)
             datum = re.search(r"\[(\d+)\.(\d+)\.\s*(\d{4})\]", i.get_text())
             plocha = re.search(r"(\d{2,3})\s*m(2|²)", nazev)
             b = dict(
-                id=f"bazos:{bid}", zdroj="Bazoš", url=base + a["href"], nazev=nazev, cena=cena,
-                adresa=lok, plocha=int(plocha.group(1)) if plocha else None,
+                id=f"bazos:{bid}", zdroj="Bazoš", url=base + a["href"], dispozice=dispozice(nazev), nazev=nazev[:90],
+                cena=cena, adresa=lok, plocha=int(plocha.group(1)) if plocha else None,
                 vlozeno=f"{datum.group(3)}-{int(datum.group(2)):02d}-{int(datum.group(1)):02d}" if datum else None,
             )
             if bid not in zname:
@@ -293,30 +341,46 @@ def bazos(s, zname):
                     g = re.search(r"maps/place/([\d.]+),([\d.]+)", dt)
                     if g:
                         b["lat"], b["lon"] = float(g.group(1)), float(g.group(2))
-                        b["km"] = vzdalenost_km(b["lat"], b["lon"])
                     p = BeautifulSoup(dt, "lxml").select_one("div.popisdetail")
-                    if p:
-                        b["popis"] = p.get_text("\n", strip=True)
-                        b["varovani"] = najdi_varovani(b["popis"])
+                    popis = p.get_text("\n", strip=True) if p else ""
+                    rb = rozbor(nazev + " " + popis)
+                    if not b["dispozice"]:
+                        b["dispozice"] = dispozice(popis)
+                    if not b["plocha"]:
+                        pl = re.search(r"(\d{2,3})\s*m(2|²)", popis)
+                        b["plocha"] = int(pl.group(1)) if pl else None
+                    patro = re.search(r"\b(\d{1,2})\.\s*(patr|podlazi|np)", bez_diakritiky(popis))
+                    b.update(rb, patro=int(patro.group(1)) if patro else None, detail_v=DETAIL_V,
+                             **odhad_poplatku(cena, popis))
                 except Exception as ex:  # noqa: BLE001
                     log(f"  Bazoš detail {bid} selhal: {ex}")
             out.append(b)
+        if LIMIT and len(out) >= LIMIT:
+            break
         offset += 20
         time.sleep(PAUZA_S)
     return out
 
 
 # --------------------------------------------------------------- DATABÁZE --
-SLOUPCE = ["zdroj", "url", "nazev", "cena", "poplatky", "plocha", "adresa", "lat", "lon", "km",
-           "metro_m", "patro", "vybaveni", "kauce", "od", "pozn_cena", "vlozeno", "varovani", "popis"]
+SLOUPCE = ["zdroj", "url", "nazev", "dispozice", "cena", "popl", "popl_os", "popl_info", "plocha", "adresa",
+           "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "vlozeno", "rk", "provize",
+           "koureni", "max2", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano", "detail_v"]
+STARE_SLOUPCE = ["km", "pozn_cena", "varovani", "popis", "poplatky"]   # z verze 1, už se nepoužívají
 
 
 def otevri_db():
     db = sqlite3.connect(DB_SOUBOR)
     db.row_factory = sqlite3.Row
-    db.execute(f"""CREATE TABLE IF NOT EXISTS byty (id TEXT PRIMARY KEY,
-        {", ".join(c + " " for c in SLOUPCE)}, cena_puvodni, prvni_videni TEXT, posledni_videni TEXT,
-        aktivni INTEGER DEFAULT 1)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS byty (id TEXT PRIMARY KEY, cena_puvodni,
+        prvni_videni TEXT, posledni_videni TEXT, aktivni INTEGER DEFAULT 1)""")
+    mam = {r["name"] for r in db.execute("PRAGMA table_info(byty)")}
+    for c in SLOUPCE:
+        if c not in mam:
+            db.execute(f"ALTER TABLE byty ADD COLUMN {c}")
+    for c in STARE_SLOUPCE:      # popisy inzerátů nedržet (DB je ve veřejném repu)
+        if c in mam:
+            db.execute(f"ALTER TABLE byty DROP COLUMN {c}")
     return db
 
 
@@ -326,118 +390,85 @@ def uloz(db, byty, beh):
         stary = db.execute("SELECT * FROM byty WHERE id=?", (b["id"],)).fetchone()
         if stary is None:
             nove += 1
-            cols = ["id"] + SLOUPCE + ["prvni_videni", "posledni_videni", "aktivni"]
-            vals = [b["id"]] + [b.get(c) for c in SLOUPCE] + [beh, beh, 1]
+            cols = ["id"] + SLOUPCE + ["cena_puvodni", "prvni_videni", "posledni_videni", "aktivni"]
+            vals = [b["id"]] + [b.get(c) for c in SLOUPCE] + [b.get("cena_puvodni"), beh, beh, 1]
             db.execute(f"INSERT INTO byty ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals)
         else:
             # Aktualizuj jen to, co přišlo (detail se u starých nestahuje znovu).
             zmeny = {c: b[c] for c in SLOUPCE if b.get(c) is not None}
             if stary["cena"] and b.get("cena") and b["cena"] != stary["cena"]:
                 zmeny["cena_puvodni"] = stary["cena_puvodni"] or stary["cena"]
+            elif b.get("cena_puvodni"):
+                zmeny["cena_puvodni"] = b["cena_puvodni"]
             zmeny.update(posledni_videni=beh, aktivni=1)
             db.execute(f"UPDATE byty SET {', '.join(k + '=?' for k in zmeny)} WHERE id=?",
                        [*zmeny.values(), b["id"]])
     return nove
 
 
-# ------------------------------------------------------------------ EXCEL --
-HLAVICKA = [("Zdroj", "zdroj", 12), ("Inzerát", "nazev", 38), ("Celkem", "celkem", 10),
-            ("Nájem", "cena", 10), ("Poplatky", "popl", 10), ("Poplatky – odkud", "popl_info", 30),
-            ("m²", "plocha", 6), ("km od Zoo", "km", 10), ("Adresa / lokalita", "adresa", 34),
-            ("Metro (m)", "metro_m", 10), ("Patro", "patro", 6), ("Vybavení", "vybaveni", 10),
-            ("Kauce", "kauce", 10), ("Volné od", "od", 11), ("Pozor v popisu", "varovani", 50),
-            ("Pozn. k ceně", "pozn_cena", 28), ("Dřív stál", "cena_puvodni", 10), ("Vloženo", "vlozeno", 11),
-            ("Poprvé viděn", "prvni_videni", 16)]
-SLOUPEC = {klic: i for i, (_, klic, _) in enumerate(HLAVICKA, 1)}
-
-CERVENA = PatternFill("solid", fgColor="F8D7DA")
-ORANZOVA = PatternFill("solid", fgColor="FFE8C2")
-ZELENA = PatternFill("solid", fgColor="D4EDDA")
-ZLUTA = PatternFill("solid", fgColor="FFF3B0")
-
-
-def s_cenou(radky):
-    """Dopočítá poplatky a celkovou cenu, vyřadí byty dražší než MAX_CENA."""
-    out = []
-    for r in map(dict, radky):
-        r["popl"], r["popl_info"] = odhad_poplatku(r)
-        r["celkem"] = r["cena"] + r["popl"] if r["cena"] and r["popl"] is not None else None
-        if (r["cena"] or 0) > MAX_CENA or (r["celkem"] or 0) > MAX_CENA:
-            continue
-        out.append(r)
-    out.sort(key=lambda r: (r["km"] is None, r["km"] or 0, r["celkem"] or r["cena"] or 0))
-    return out
-
-
-def list_excelu(ws, radky):
-    ws.append([h for h, _, _ in HLAVICKA])
-    for c, (_, _, w) in enumerate(HLAVICKA, 1):
-        ws.cell(1, c).font = Font(bold=True, color="FFFFFF")
-        ws.cell(1, c).fill = PatternFill("solid", fgColor="34495E")
-        ws.column_dimensions[ws.cell(1, c).column_letter].width = w
-    for r in radky:
-        ws.append([r[klic] for _, klic, _ in HLAVICKA])
-        n = ws.max_row
-        bunka = lambda klic: ws.cell(n, SLOUPEC[klic])  # noqa: E731
-        bunka("nazev").hyperlink = r["url"]
-        bunka("nazev").font = Font(color="0563C1", underline="single")
-        for k in ("celkem", "cena", "popl", "kauce", "cena_puvodni"):
-            bunka(k).number_format = "#,##0"
-        bunka("celkem").font = Font(bold=True)
-        if r["popl"] is None or "1 osobu" in r["popl_info"]:
-            bunka("popl_info").fill = ZLUTA
-        var = r["varovani"] or ""
-        if "Zákaz kouření" in var:
-            bunka("varovani").fill = CERVENA
-        elif "max. 2" in var:
-            bunka("varovani").fill = ORANZOVA
-        elif "Kouření OK" in var:
-            bunka("varovani").fill = ZELENA
-        bunka("varovani").alignment = Alignment(wrap_text=True, vertical="top")
-    ws.freeze_panes = "C2"
-    ws.auto_filter.ref = ws.dimensions
-
-
-def uloz_excel(db, beh):
-    # Bazoš hledá v kruhu podle PSČ, přesná vzdálenost je známa až z detailu -> dofiltrovat tady.
-    dosah = "" if MAX_VZDALENOST_KM is None else f"AND (km IS NULL OR km <= {MAX_VZDALENOST_KM})"
-    nove = s_cenou(db.execute(f"SELECT * FROM byty WHERE prvni_videni=? {dosah}", (beh,)))
-    vse = s_cenou(db.execute(f"SELECT * FROM byty WHERE aktivni=1 {dosah}"))
-    wb = Workbook()
-    ws = wb.active
-    ws.title = f"Nové ({len(nove)})"
-    list_excelu(ws, nove)
-    list_excelu(wb.create_sheet(f"Všechny ({len(vse)})"), vse)
-    cil = EXCEL_SOUBOR
-    try:
-        wb.save(cil)
-    except PermissionError:   # Excel má soubor otevřený
-        cil = SLOZKA / f"byty_{datetime.now():%Y%m%d_%H%M}.xlsx"
-        wb.save(cil)
-        log(f"byty.xlsx je otevřený v Excelu, uloženo jako {cil.name}")
-    return cil, len(nove), len(vse)
-
-
 # -------------------------------------------------------------------- WEB --
-WEB_POLE = ["id", "zdroj", "url", "nazev", "celkem", "cena", "popl", "popl_info", "plocha", "km",
-            "adresa", "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "varovani",
-            "pozn_cena", "cena_puvodni", "vlozeno", "prvni_videni", "popis"]
+WEB_POLE = ["id", "zdroj", "url", "nazev", "dispozice", "cena", "popl", "popl_os", "popl_info", "plocha", "adresa",
+            "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "vlozeno", "rk", "provize",
+            "koureni", "max2", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano",
+            "cena_puvodni", "prvni_videni"]
+PORADI_ZDROJU = {"Bezrealitky": 0, "Sreality": 1, "Bazoš": 2}   # u duplicit vyhrává ten s nejvíc údaji
 
 
 def cislo(x):
     return int(x) if isinstance(x, float) and x.is_integer() else x
 
 
+def km(a, b):
+    la1, lo1, la2, lo2 = map(math.radians, (a["lat"], a["lon"], b["lat"], b["lon"]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+
+def je_duplicita(a, b):
+    """Stejný byt na jiném portálu: stejná dispozice, plocha ±2 m², cena ±5 %, do 400 m."""
+    return (a["zdroj"] != b["zdroj"] and a.get("dispozice") == b.get("dispozice")
+            and abs(a["plocha"] - b["plocha"]) <= 2
+            and abs(a["cena"] - b["cena"]) <= 0.05 * max(a["cena"], b["cena"])
+            and km(a, b) <= 0.4)
+
+
+def sluc_duplicity(byty):
+    lze = [b for b in byty if b.get("plocha") and b.get("cena") and b.get("lat")]
+    skupiny = {}
+    for b in lze:
+        skupiny.setdefault((b.get("dispozice"), round(b["plocha"] / 5)), []).append(b)
+    pryc = set()
+    for b in sorted(lze, key=lambda b: PORADI_ZDROJU.get(b["zdroj"], 9)):
+        if b["id"] in pryc:
+            continue
+        for kl in (round(b["plocha"] / 5) - 1, round(b["plocha"] / 5), round(b["plocha"] / 5) + 1):
+            for o in skupiny.get((b.get("dispozice"), kl), []):
+                if o["id"] != b["id"] and o["id"] not in pryc and je_duplicita(b, o):
+                    pryc.add(o["id"])
+                    b.setdefault("dalsi", []).append(dict(zdroj=o["zdroj"], url=o["url"]))
+                    for k, v in o.items():       # doplnit, co hlavnímu inzerátu chybí
+                        if b.get(k) is None and v is not None and k in WEB_POLE:
+                            b[k] = v
+    return [b for b in byty if b["id"] not in pryc]
+
+
 def uloz_web(db, beh):
-    dosah = "" if MAX_VZDALENOST_KM is None else f"AND (km IS NULL OR km <= {MAX_VZDALENOST_KM})"
     byty = []
-    for r in s_cenou(db.execute(f"SELECT * FROM byty WHERE aktivni=1 {dosah}")):
-        b = {k: cislo(r.get(k)) for k in WEB_POLE}
-        if b["popis"] and len(b["popis"]) > 2500:
-            b["popis"] = b["popis"][:2500] + "…"
-        byty.append({k: v for k, v in b.items() if v not in (None, "")})
-    data = dict(aktualizovano=beh, max_cena=MAX_CENA, osob=POCET_OSOB, max_km=MAX_VZDALENOST_KM,
-                prace=PRACE, byty=byty)
+    for r in db.execute("SELECT * FROM byty WHERE aktivni=1 AND cena BETWEEN 3000 AND 500000"):
+        b = {k: cislo(r[k]) for k in WEB_POLE}
+        for k in ("rk", "provize", "koureni", "max2", "zvirata", "kratkodobe", "vytah", "venku",
+                  "rezervovano", "popl_os"):
+            if b[k] is not None:
+                b[k] = bool(b[k])
+        if b["vybaveni"] in (0, 1):          # SQLite drží True/False jako 1/0, "částečně" jako text
+            b["vybaveni"] = bool(b["vybaveni"])
+        byty.append(b)
+    byty = sluc_duplicity(byty)
+    # Vynechat prázdné hodnoty; False nechat jen tam, kde nese informaci ("zákaz", "bez výtahu"…).
+    tri_stav = {"koureni", "zvirata", "provize", "vytah", "rk", "vybaveni"}
+    byty = [{k: v for k, v in b.items() if v not in (None, "") and (v is not False or k in tri_stav)}
+            for b in byty]
+    data = dict(aktualizovano=beh, byty=byty)
     WEB_JSON.parent.mkdir(exist_ok=True)
     WEB_JSON.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     return len(byty)
@@ -446,25 +477,24 @@ def uloz_web(db, beh):
 # ------------------------------------------------------------------- MAIN --
 def main():
     beh = datetime.now().strftime("%Y-%m-%d %H:%M")
-    log(f"=== Start ({beh}) ===")
+    log(f"=== Start ({beh}){f' LIMIT {LIMIT}' if LIMIT else ''} ===")
     s, db = session(), otevri_db()
     for nazev, fce in (("Sreality", sreality), ("Bezrealitky", bezrealitky), ("Bazoš", bazos)):
         try:
             zname = {r["id"].split(":", 1)[1] for r in db.execute(
-                "SELECT id FROM byty WHERE zdroj=? AND popis IS NOT NULL", (nazev,))}
+                "SELECT id FROM byty WHERE zdroj=? AND detail_v>=?", (nazev, DETAIL_V))}
             byty = fce(s, zname)
             nove = uloz(db, byty, beh)
-            # Co zdroj už nevrací, je pryč (pronajato/smazáno). Jen když zdroj prošel bez chyby.
-            db.execute("UPDATE byty SET aktivni=0 WHERE zdroj=? AND posledni_videni<>?", (nazev, beh))
+            # Co zdroj už nevrací, je pryč (pronajato/smazáno). Jen když zdroj prošel celý a bez chyby.
+            if not LIMIT:
+                db.execute("UPDATE byty SET aktivni=0 WHERE zdroj=? AND posledni_videni<>?", (nazev, beh))
             db.commit()
-            log(f"{nazev}: {len(byty)} v dosahu, z toho {nove} nových")
+            log(f"{nazev}: {len(byty)} inzerátů, z toho {nove} nových")
         except Exception as ex:  # noqa: BLE001
             db.rollback()
             log(f"{nazev}: CHYBA {type(ex).__name__}: {ex}")
-    log(f"Web: {WEB_JSON}  ({uloz_web(db, beh)} bytů)")
-    if not os.environ.get("CI"):
-        cil, n_nove, n_vse = uloz_excel(db, beh)
-        log(f"Excel: {cil}  (nové: {n_nove}, aktivní celkem: {n_vse})")
+    db.execute("VACUUM")
+    log(f"Web: {WEB_JSON}  ({uloz_web(db, beh)} bytů po sloučení duplicit)")
     return 0
 
 
