@@ -491,7 +491,8 @@ function karta(b) {
   if (b.koureni === true) t("good", "kouření OK");
   if (b.zvirata === false) t("bad", "bez zvířat");
   if (b.zvirata === true) t("good", "zvířata OK");
-  if (b.max2) t(S.osob >= 3 ? "bad" : "warn", "asi max. 2 osoby");
+  if (b.max2) t(S.osob >= 3 ? "bad" : "warn", "max. 2 osoby");
+  else if (b.pro_par) t("", "popsán jako vhodný pro pár");
   if (b.kratkodobe) t("warn", "krátkodobě");
   if (b.popl_os) t("warn", `poplatky za osobu (×${S.osob})`);
   if (b.popl_info && /1–2 osoby/.test(b.popl_info) && S.osob >= 3) t("warn", "poplatky uvedeny pro 1–2 osoby");

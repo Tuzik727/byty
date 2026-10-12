@@ -27,7 +27,7 @@ from urllib3.util.retry import Retry
 
 # ---------------------------------------------------------------- NASTAVENÍ --
 PAUZA_S = 0.7                # pauza mezi požadavky na detail (šetrnost k webům)
-DETAIL_V = 2                 # verze rozboru detailu; zvýšení = znovu stáhnout detaily
+DETAIL_V = 3                 # verze rozboru detailu; zvýšení = znovu stáhnout detaily
 LIMIT = int(os.environ.get("BYTY_LIMIT") or 0) or None
 
 SLOZKA = Path(__file__).resolve().parent
@@ -79,18 +79,39 @@ def _je(vzor, t):
     return re.search(vzor, t) is not None
 
 
+# Pravidla ověřena ručně na vzorku 12 inzerátů na pravidlo (12. 10. 2026).
+MAX2 = re.compile(r"(max\.?|maximalne|nejvyse|pouze|jen|vyhradne) ?(pro )?(1\s*[-–]\s*2|2|dve|dva|jednu|1) ?"
+                  r"(osob|lid|najemnik|dospel)"
+                  r"|(vhodn\w*|urcen\w*|ideal\w*) (predevsim |hlavne |pouze |jen |max\.? )?pro (1\s*[-–]\s*2|jednu|1) osob")
+PRO_PAR = re.compile(r"(vhodn\w*|ideal\w*|urcen\w*) (predevsim |hlavne )?(pro|i pro) (jednotliv\w*|par\b|pary)")
+KRATKODOBE = re.compile(r"kratkodob\w*|short.?term|airbnb")
+NEGACE = re.compile(r"nelze|neni mozn|nepreje|neumoz|neprovozuje|nepripous|zakaz|vylouc|nesmi|nebude|neni dovol|nepronaji")
+
+
 def rozbor(text):
     t = bez_diakritiky(text)
     r = {}
+    t_kour = re.sub(r"kura\w* ?(ci|nebo|/) ?nekura\w*", "", t)          # "kuřák či nekuřák?" je otázka, ne zákaz
     if _je(r"nekur|nekour|zakaz\w* koureni|koureni\w* (je )?(zakaz|neni povol|neni mozn)"
-           r"|nelze kourit|bez koureni|non-?smok", t):
+           r"|nelze kourit|bez koureni|non-?smok", t_kour):
         r["koureni"] = False
     elif _je(r"kuraci? (vitan|povolen|ok)|koureni (je )?(povoleno|mozne)", t):
         r["koureni"] = True
-    if _je(r"(max\.?|maximalne|nejvyse|idealne|pouze|jen) ?(pro )?(1\s*[-–]\s*2|2|dve|dva|jednu|1) "
-           r"?(osob|lid|najemnik)|pro (jednu|1|1\s*[-–]\s*2) osob|\bpro (par|pary)\b"
-           r"|(vhodn\w*|ideal\w*) (pro|i pro) (par|jednotliv)", t):
-        r["max2"] = True
+    # "max. 2 osoby" jen jako výslovné omezení, ne "zálohy pro 2 osoby" ani "vhodné pro pár"
+    for m in MAX2.finditer(t):
+        if (not re.search(r"zaloh|poplat|sluzb|energi|kc|czk", t[max(0, m.start() - 40):m.start()])
+                and not re.search(r"(nejvyse|max\.?|az|i) ?(3|tri)\b", t[m.end():m.end() + 25])):   # "1–2 osoby (nejvýše 3)"
+            r["max2"] = True
+            break
+    if not r.get("max2"):
+        for m in PRO_PAR.finditer(t):
+            if not re.search(r"rodin|deti|spolubydl|3 osob|tri osob", t[m.end():m.end() + 40]):
+                r["pro_par"] = True
+                break
+    # krátkodobý pronájem jen když ho inzerát nabízí (ne "krátkodobé nelze") a nenabízí i dlouhodobý
+    if not _je(r"dlouhodob", t) and any(not NEGACE.search(t[max(0, m.start() - 60):m.end() + 60])
+                                        for m in KRATKODOBE.finditer(t)):
+        r["kratkodobe"] = True
     if _je(r"bez (domacich )?(zvirat|mazlick)|zvirata (ne|nejsou)|zakaz zvirat|nechovat zvir", t):
         r["zvirata"] = False
     elif _je(r"(zvirat\w*|mazlic\w*|pejsk\w*|psi) (jsou |je )?(vitan|povolen|mozn|ok|po dohode)"
@@ -100,8 +121,6 @@ def rozbor(text):
         r["provize"] = False
     elif _je(r"provize", t):
         r["provize"] = True
-    if _je(r"kratkodob|short.?term|airbnb", t):
-        r["kratkodobe"] = True
     if _je(r"bez vytahu|vytah ne\b|neni vytah", t):
         r["vytah"] = False
     elif _je(r"\bvytah", t):
@@ -116,7 +135,7 @@ KLIC_SLUZBY = re.compile(r"poplat|sluzb|zaloh|naklady na bydleni|energi|vyuctov"
 KLIC_ELEKTRINA = re.compile(r"elektr|\bel\.")
 NE_POPLATKY = re.compile(r"kauc|proviz|jistot|dph|garaz|parkov|stani|najemn[eiy]|najmu|najem\b|cena")
 JEDNOTKA_NE = re.compile(r"\s*(m\b|m2|m²|km|min|metr|let\b|rok|%|\.? ?patr|mb|gb|kw|ks)")
-ZA_OSOBU = re.compile(r"^\W*(kc|czk)?\W*(mes\w*\W*)?(poplat\w* |sluzb\w* )?(/|na |za |kazd\w* )\s*os")
+ZA_OSOBU = re.compile(r"^\W*(kc|czk)?\W*(mes\w*\W*)?(poplat\w* |sluzb\w* )?(/|na |za |kazd\w* )\s*(1\s*)?os")
 PRO_N_OSOB = re.compile(r"(\b[12] ?os|jedn\w* osob|dve osob|dva lid)")
 
 
@@ -227,7 +246,7 @@ def sreality(s, zname):
                     kauce=dt.get("refundable_deposit"),
                     od=dt.get("ready_date"),
                     vlozeno=dt.get("since"),
-                    koureni=rb.get("koureni"), max2=rb.get("max2"), zvirata=rb.get("zvirata"),
+                    koureni=rb.get("koureni"), max2=rb.get("max2"), pro_par=rb.get("pro_par"), zvirata=rb.get("zvirata"),
                     kratkodobe=rb.get("kratkodobe"),
                     provize=False if dt.get("tenant_not_pay_commission") else rb.get("provize"),
                     vytah=ano_ne(nazev_z(dt.get("elevator"))) if ano_ne(nazev_z(dt.get("elevator"))) is not None
@@ -280,7 +299,7 @@ def bezrealitky(s, zname):
                 kauce=a.get("deposit"), od=ts_datum(a.get("availableFrom")),
                 vlozeno=ts_datum(a.get("timeActivated")),
                 rk=False, rezervovano=bool(a.get("reserved")),
-                koureni=rb.get("koureni"), max2=rb.get("max2"),
+                koureni=rb.get("koureni"), max2=rb.get("max2"), pro_par=rb.get("pro_par"),
                 zvirata=True if a.get("petFriendly") else rb.get("zvirata"),
                 kratkodobe=True if a.get("shortTerm") else rb.get("kratkodobe"),
                 provize=False,
@@ -365,7 +384,7 @@ def bazos(s, zname):
 # --------------------------------------------------------------- DATABÁZE --
 SLOUPCE = ["zdroj", "url", "nazev", "dispozice", "cena", "popl", "popl_os", "popl_info", "plocha", "adresa",
            "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "vlozeno", "rk", "provize",
-           "koureni", "max2", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano", "detail_v"]
+           "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano", "detail_v"]
 STARE_SLOUPCE = ["km", "pozn_cena", "varovani", "popis", "poplatky"]   # z verze 1, už se nepoužívají
 
 
@@ -409,7 +428,7 @@ def uloz(db, byty, beh):
 # -------------------------------------------------------------------- WEB --
 WEB_POLE = ["id", "zdroj", "url", "nazev", "dispozice", "cena", "popl", "popl_os", "popl_info", "plocha", "adresa",
             "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "vlozeno", "rk", "provize",
-            "koureni", "max2", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano",
+            "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano",
             "cena_puvodni", "prvni_videni"]
 PORADI_ZDROJU = {"Bezrealitky": 0, "Sreality": 1, "Bazoš": 2}   # u duplicit vyhrává ten s nejvíc údaji
 
@@ -488,7 +507,7 @@ def uloz_web(db, beh):
     byty = []
     for r in db.execute("SELECT * FROM byty WHERE aktivni=1 AND cena BETWEEN 3000 AND 500000"):
         b = {k: cislo(r[k]) for k in WEB_POLE}
-        for k in ("rk", "provize", "koureni", "max2", "zvirata", "kratkodobe", "vytah", "venku",
+        for k in ("rk", "provize", "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku",
                   "rezervovano", "popl_os"):
             if b[k] is not None:
                 b[k] = bool(b[k])
