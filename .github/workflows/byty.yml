@@ -2,7 +2,7 @@ name: Hledání bytů
 
 on:
   schedule:
-    - cron: "17 4,7,10,13,16,19 * * *"   # UTC = 6–21 h českého času, každé 3 hodiny
+    - cron: "7,37 * * * *"   # každých 30 minut (GitHub plánované běhy občas zpozdí)
   workflow_dispatch:
   push:
     branches: [main]
@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  issues: read
   pages: write
   id-token: write
 
@@ -40,15 +41,19 @@ jobs:
           if git fetch --depth=1 origin data; then
             git show origin/data:byty.db > byty.db
             git show origin/data:byty.json > web/byty.json
+            git show origin/data:hlidani.json > hlidani.json 2>/dev/null || rm -f hlidani.json
           fi
       - name: Stáhnout byty
         if: github.event_name != 'push'
         run: python -X utf8 hledej_byty.py
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Uložit data
         if: github.event_name != 'push'
         run: |
           d=$(mktemp -d)
           cp byty.db web/byty.json "$d"
+          if [ -f hlidani.json ]; then cp hlidani.json "$d"; fi
           cd "$d"
           git init -q -b data
           git config user.name "github-actions[bot]"

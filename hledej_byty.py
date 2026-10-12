@@ -452,6 +452,38 @@ def sluc_duplicity(byty):
     return [b for b in byty if b["id"] not in pryc]
 
 
+def skup_disp(d):
+    return "4+" if d and d[0] in "456789" else d
+
+
+def cena_vuci_okoli(byty, okruh_km=1.5, min_vzorek=6):
+    """Doplní "rel": o kolik je nájem za m² vyšší/nižší než medián stejné dispozice v okolí (−0.12 = o 12 % levnější).
+    Když je v okolí málo bytů, srovná s celou Prahou."""
+    lze = [b for b in byty if b.get("plocha") and b["plocha"] >= 10 and b.get("cena") and b.get("lat")]
+    mrizka, praha = {}, {}
+    for b in lze:
+        b["_m2"] = b["cena"] / b["plocha"]
+        b["_bunka"] = (round(b["lat"] / 0.0135), round(b["lon"] / 0.021))   # ~1,5 × 1,5 km
+        mrizka.setdefault((skup_disp(b.get("dispozice")), b["_bunka"]), []).append(b)
+        praha.setdefault(skup_disp(b.get("dispozice")), []).append(b["_m2"])
+
+    def median(a):
+        a = sorted(a)
+        return a[len(a) // 2] if a else None
+
+    for b in lze:
+        d, (x, y) = skup_disp(b.get("dispozice")), b["_bunka"]
+        okoli = [o["_m2"] for dx in (-1, 0, 1) for dy in (-1, 0, 1) for o in mrizka.get((d, (x + dx, y + dy)), [])
+                 if o is not b and km(b, o) <= okruh_km]
+        if len(okoli) < min_vzorek:
+            okoli = praha.get(d, []) if len(praha.get(d, [])) > min_vzorek else []
+        med = median(okoli)
+        if med:
+            b["rel"] = round(b["_m2"] / med - 1, 2)
+    for b in lze:
+        del b["_m2"], b["_bunka"]
+
+
 def uloz_web(db, beh):
     byty = []
     for r in db.execute("SELECT * FROM byty WHERE aktivni=1 AND cena BETWEEN 3000 AND 500000"):
@@ -460,10 +492,13 @@ def uloz_web(db, beh):
                   "rezervovano", "popl_os"):
             if b[k] is not None:
                 b[k] = bool(b[k])
+        if b["popl"] == 0:                  # 0 = nevyplněno (starší záznamy z Bezrealitek)
+            b["popl"], b["popl_info"] = None, "poplatky neuvedeny"
         if b["vybaveni"] in (0, 1):          # SQLite drží True/False jako 1/0, "částečně" jako text
             b["vybaveni"] = bool(b["vybaveni"])
         byty.append(b)
     byty = sluc_duplicity(byty)
+    cena_vuci_okoli(byty)
     # Vynechat prázdné hodnoty; False nechat jen tam, kde nese informaci ("zákaz", "bez výtahu"…).
     tri_stav = {"koureni", "zvirata", "provize", "vytah", "rk", "vybaveni"}
     byty = [{k: v for k, v in b.items() if v not in (None, "") and (v is not False or k in tri_stav)}
@@ -471,7 +506,7 @@ def uloz_web(db, beh):
     data = dict(aktualizovano=beh, byty=byty)
     WEB_JSON.parent.mkdir(exist_ok=True)
     WEB_JSON.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    return len(byty)
+    return byty
 
 
 # ------------------------------------------------------------------- MAIN --
@@ -494,7 +529,13 @@ def main():
             db.rollback()
             log(f"{nazev}: CHYBA {type(ex).__name__}: {ex}")
     db.execute("VACUUM")
-    log(f"Web: {WEB_JSON}  ({uloz_web(db, beh)} bytů po sloučení duplicit)")
+    byty = uloz_web(db, beh)
+    log(f"Web: {WEB_JSON}  ({len(byty)} bytů po sloučení duplicit)")
+    try:
+        import hlidani
+        hlidani.spust(byty, s, log)
+    except Exception as ex:  # noqa: BLE001
+        log(f"Hlídání: CHYBA {type(ex).__name__}: {ex}")
     return 0
 
 

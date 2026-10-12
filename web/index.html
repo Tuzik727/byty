@@ -135,6 +135,30 @@ textarea.inp{resize:vertical;min-height:120px;font-size:13px;line-height:1.45}
   .price{text-align:left}
   .sub{flex-basis:100%;order:3}
 }
+/* záložky, moje hledání, dialog */
+.tabs{display:flex;gap:2px;background:var(--soft);border:1px solid var(--line);border-radius:9px;padding:2px}
+.tab{border:0;background:none;border-radius:7px;padding:4px 12px;cursor:pointer;font-size:13.5px;color:var(--muted);min-height:28px;white-space:nowrap}
+.tab[aria-pressed=true]{background:var(--card);color:var(--text);font-weight:600;box-shadow:var(--shadow)}
+.tab .n{font-size:12px;color:var(--faint);margin-left:4px}
+.card.kb{outline:2px solid var(--accent);outline-offset:1px}
+.board{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));align-items:start}
+.col h3{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);margin:0 0 8px;display:flex;justify-content:space-between}
+.mini{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:grid;gap:4px}
+.mini .r{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.mini a{color:var(--text);font-weight:600;text-decoration:none}
+.mini a:hover{color:var(--accent)}
+.mini .m{font-size:12.5px;color:var(--muted)}
+.mini select{font-size:12.5px;padding:3px 6px;min-height:28px;width:auto}
+.mini.gone{opacity:.55}
+.note{font-size:12.5px;border-radius:7px;padding:3px 8px;background:var(--warn-bg);color:var(--warn)}
+.tools{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+dialog{background:var(--card);color:var(--text);border:1px solid var(--line2);border-radius:14px;padding:22px;max-width:520px;width:calc(100vw - 32px);box-shadow:0 24px 64px rgba(0,0,0,.5)}
+dialog::backdrop{background:rgba(0,0,0,.55)}
+dialog h2{font-size:17px;margin:0 0 12px}
+dialog ol{padding-left:20px;margin:0 0 14px;display:grid;gap:10px}
+dialog code{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:13px}
+dialog .small{font-size:12.5px;color:var(--muted)}
+kbd{background:var(--soft);border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;padding:0 5px;font:12px/1.6 ui-monospace,monospace}
 .leaflet-container{font:13.5px/1.4 Inter,system-ui,sans-serif;background:var(--soft)}
 .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--card);color:var(--text);box-shadow:var(--shadow);border:1px solid var(--line)}
 .leaflet-bar a{background:var(--card);color:var(--text);border-color:var(--line)}
@@ -223,25 +247,56 @@ textarea.inp{resize:vertical;min-height:120px;font-size:13px;line-height:1.45}
 
   <main class="res">
     <div class="top">
+      <div class="tabs" role="tablist">
+        <button class="tab" data-v="nabidky" aria-pressed="true">Nabídky</button>
+        <button class="tab" data-v="inbox" aria-pressed="false" title="Jen byty, které jsem ještě neviděl ani nevyřídil">K vyřízení<span class="n" id="nInbox"></span></button>
+        <button class="tab" data-v="moje" aria-pressed="false">Moje hledání<span class="n" id="nMoje"></span></button>
+      </div>
       <button class="btn ftoggle" id="ftoggle">Filtry</button>
       <input class="inp q" type="search" id="q" placeholder="Ulice, čtvrť…" aria-label="Hledat v adrese">
       <select class="inp" id="sort" aria-label="Řadit" style="width:auto">
         <option value="cena">Nejlevnější</option>
+        <option value="vyhodne">Nejvýhodnější vůči okolí</option>
         <option value="m2">Nejlevnější za m²</option>
         <option value="nove">Nejnovější</option>
         <option value="plocha">Největší</option>
         <option value="km">Nejblíž k místu</option>
       </select>
       <button class="btn" id="mapBtn">Mapa</button>
+      <button class="btn" id="hlidatBtn" title="Posílat upozornění na nové byty podle těchto filtrů">🔔 Hlídat</button>
+      <button class="btn" id="keysBtn" title="Klávesové zkratky" aria-label="Klávesové zkratky">⌨</button>
     </div>
     <div class="count" id="count"></div>
     <div class="why" id="why"></div>
     <div class="list" id="list"></div>
+    <div id="moje" hidden></div>
     <button class="btn more" id="more" hidden>Zobrazit další</button>
   </main>
 
   <div id="mapbox" hidden><div id="map"></div></div>
 </div>
+
+<dialog id="hlidatDlg">
+  <h2>🔔 Hlídat toto hledání</h2>
+  <ol>
+    <li>Nainstalujte si aplikaci <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> (Android i iPhone, zdarma) a přidejte v ní odběr tématu
+      <code id="tema-ntfy"></code> <button class="btn" id="temaCopy" type="button">Kopírovat</button></li>
+    <li>Založte hlídání – otevře se předvyplněný formulář na GitHubu, stačí ho odeslat (potřebujete účet na GitHubu).<br>
+      <a class="btn pri" id="hlidatIssue" target="_blank" rel="noopener" style="margin-top:6px">Založit hlídání na GitHubu</a></li>
+    <li>Do půl hodiny přijde potvrzení, pak každý nový byt podle současných filtrů. Hlídání zrušíte zavřením issue.</li>
+  </ol>
+  <p class="small">Téma v ntfy je veřejné – kdo ho zná, uvidí stejné notifikace. Hlídání od jiných lidí než vlastníka webu se spustí, až ho vlastník schválí štítkem <code>hlidani</code>.</p>
+  <form method="dialog" style="text-align:right"><button class="btn">Zavřít</button></form>
+</dialog>
+
+<dialog id="keysDlg">
+  <h2>Klávesové zkratky</h2>
+  <p><kbd>J</kbd> / <kbd>K</kbd> další / předchozí byt &nbsp; <kbd>O</kbd> otevřít inzerát<br>
+  <kbd>F</kbd> oblíbit &nbsp; <kbd>X</kbd> nezajímá mě &nbsp; <kbd>N</kbd> napsat &nbsp; <kbd>M</kbd> na mapě<br>
+  <kbd>/</kbd> hledat &nbsp; <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> záložky &nbsp; <kbd>?</kbd> tahle nápověda</p>
+  <p class="small">Nejrychlejší rutina: záložka „K vyřízení“ a pak jen <kbd>J</kbd>, <kbd>F</kbd> nebo <kbd>X</kbd> – každý byt vyřídíte jednou a zmizí.</p>
+  <form method="dialog" style="text-align:right"><button class="btn">Zavřít</button></form>
+</dialog>
 
 <script>
 "use strict";
@@ -262,10 +317,10 @@ const DISP = [["1+kk","1+kk"],["1+1","1+1"],["2+kk","2+kk"],["2+1","2+1"],["3+kk
 const VYCHOZI = {disp: [], cena: CENA_MAX, osob: 2, plocha: 0, bod: null, km: 5, q: "", sort: "cena",
   kourim: false, zvire: false, venku: false, vytah: false, vybaveny: false, nevybaveny: false,
   bezrk: false, bezprov: false, od: "", nove: false, fav: false, znamePopl: false, kratke: false,
-  rezerv: false, skryte: false, nekontakt: false, mapa: false};
+  rezerv: false, skryte: false, nekontakt: false, mapa: false, view: "nabidky"};
 const ZKRATKY = {disp:"d", cena:"c", osob:"o", plocha:"p", bod:"b", km:"k", q:"q", sort:"s", kourim:"ko",
   zvire:"zv", venku:"ve", vytah:"vy", vybaveny:"vb", nevybaveny:"nv", bezrk:"rk", bezprov:"pr", od:"od",
-  nove:"n", fav:"f", znamePopl:"zp", kratke:"kr", rezerv:"re", skryte:"sk", nekontakt:"nk", mapa:"m"};
+  nove:"n", fav:"f", znamePopl:"zp", kratke:"kr", rezerv:"re", skryte:"sk", nekontakt:"nk", mapa:"m", view:"v"};
 
 function zUrl() {   // nastavení v odkazu má přednost (dá se sdílet), jinak poslední vlastní
   const p = new URLSearchParams(location.search);
@@ -300,6 +355,19 @@ function doUrl() {
 const S = zUrl() || {...VYCHOZI, ...store.get("byty2.filtr", {})};
 let favs = new Set(store.get("byty.fav", [])), hid = new Set(store.get("byty.hid", [])), seen = new Set(store.get("byty.seen", []));
 const psano = store.get("byty.psano", {});   // id -> datum, kdy jsem napsal
+const stav = store.get("byty.stav", {});     // id -> {s: odpoved|prohlidka|beru|zamitnuto, d: datum}
+const snap = store.get("byty.snap", {});     // id -> údaje bytu, aby zůstal v "Moje hledání" i po stažení inzerátu
+const dnes = () => new Date().toISOString().slice(0, 10);
+const vyrizeno = id => seen.has(id) || favs.has(id) || hid.has(id) || psano[id] || stav[id];
+function sledovat(b) {   // uložit kopii bytu, který jsem si oblíbil / kontaktoval
+  snap[b.id] = {id: b.id, url: b.url, zdroj: b.zdroj, dispozice: b.dispozice, nazev: b.nazev, plocha: b.plocha,
+    adresa: b.adresa, cena: b.cena, celkem: b._celkem, odhad: b._odhad};
+  store.set("byty.snap", snap);
+}
+function ulozVse() {
+  store.set("byty.fav", [...favs]); store.set("byty.hid", [...hid]); store.set("byty.seen", [...seen].slice(-5000));
+  store.set("byty.psano", psano); store.set("byty.stav", stav); store.set("byty.snap", snap);
+}
 const SABLONA = `Dobrý den,
 
 zaujal mě Váš inzerát na byt {dispozice}, {adresa}, za {cena}. Je byt ještě volný?
@@ -345,6 +413,7 @@ const dispSkup = b => !b.dispozice ? "?" : /^[4-9]/.test(b.dispozice) ? "4+" : b
 
 // Proč byt neprošel. Vrací název "chytrého" důvodu, true pro běžný filtr, false když prošel.
 function duvod(b) {
+  if (S.view === "inbox" && vyrizeno(b.id)) return true;
   if (S.disp.length ? !S.disp.includes(dispSkup(b)) : dispSkup(b) === "pokoj") return true;
   if (S.cena < CENA_MAX && b._celkem > S.cena) return true;
   if (S.plocha && (b.plocha ?? 0) < S.plocha) return true;
@@ -384,17 +453,28 @@ function filtruj() {
     nove: (a, b) => b.prvni_videni.localeCompare(a.prvni_videni) || (b.vlozeno || "").localeCompare(a.vlozeno || ""),
     plocha: (a, b) => (b.plocha ?? 0) - (a.plocha ?? 0),
     km: (a, b) => (a._km ?? 1e9) - (b._km ?? 1e9),
+    vyhodne: (a, b) => (a.rel ?? 9) - (b.rel ?? 9) || a._celkem - b._celkem,
   }[S.bod || S.sort !== "km" ? S.sort : "cena"];
   rows.sort(cmp);
   return skryto;
 }
 
 // ------------------------------------------------------------- vykreslení --
+function naTrhu(b) {   // dny od vložení (nebo od chvíle, kdy jsme byt poprvé viděli)
+  const od = [b.vlozeno, b.prvni_videni?.slice(0, 10)].filter(Boolean).sort()[0];
+  return od ? Math.floor((parseTs(DATA.aktualizovano.slice(0, 10)) - parseTs(od)) / 864e5) : 0;
+}
 function karta(b) {
   const tags = [];
   const t = (cls, txt) => tags.push(`<span class="t ${cls}">${esc(txt)}</span>`);
   if (b._novy) t("new", "NOVÉ");
   if (b.rezervovano) t("warn", "rezervováno");
+  const podezrele = b.rel != null && b.rel <= -0.35 && (b.zdroj === "Bazoš" || b.lat == null);
+  if (podezrele) t("bad", "podezřele levné – nikdy neplaťte předem");
+  else if (b.rel != null && b.rel <= -0.08) t("good", `o ${Math.round(-b.rel * 100)} % levnější než okolí`);
+  else if (b.rel != null && b.rel >= 0.15) t("", `o ${Math.round(b.rel * 100)} % dražší než okolí`);
+  const dny = naTrhu(b);
+  if (dny >= 14) t("", `na trhu ${dny} dní`);
   if (b.rk === false) t("good", "od majitele");
   if (b.provize === false && b.rk !== false) t("good", "bez provize");
   if (b.provize === true) t("", "provize");
@@ -432,6 +512,7 @@ function karta(b) {
                     : `<button class="btn pri" data-act="psat">Napsat</button>`}
       <button class="btn${favs.has(b.id) ? " on" : ""}" data-act="fav">${favs.has(b.id) ? "★ Oblíbený" : "☆ Oblíbit"}</button>
       <button class="btn" data-act="hid">${hid.has(b.id) ? "Vrátit" : "Nezajímá mě"}</button>
+      ${psano[b.id] || favs.has(b.id) ? vyberStavu(b.id) : ""}
       ${b.lat != null ? `<button class="btn" data-act="map">Na mapě</button>` : ""}
       <span class="src">${zdroje}${b.vlozeno ? " · vloženo " + esc(datum(b.vlozeno)) : ""}</span>
     </div>
@@ -453,15 +534,27 @@ function render() {
   $("#sort option[value=km]").disabled = !S.bod;
   $("#app").classList.toggle("map-on", S.mapa); $("#mapbox").hidden = !S.mapa;
   $("#mapBtn").textContent = S.mapa ? "Skrýt mapu" : "Mapa";
+  $$("[data-v]").forEach(t => t.setAttribute("aria-pressed", S.view === t.dataset.v));
   doUrl();
   if (!DATA) return;
+  const moje = Object.keys({...snap, ...psano, ...stav}).filter(id => favs.has(id) || psano[id] || stav[id]);
+  $("#nMoje").textContent = moje.length || "";
+  const jeMoje = S.view === "moje";
+  $("#moje").hidden = !jeMoje; $("#list").hidden = jeMoje; $("#count").hidden = jeMoje; $("#why").hidden = jeMoje;
+  if (jeMoje) { for (const b of DATA.byty) spocitej(b); $("#more").hidden = true; kresliMoje(moje); }
 
   for (const b of DATA.byty) spocitej(b);
   const skryto = filtruj();
   $("#count").innerHTML = `<b>${num(rows.length)}</b> z ${num(DATA.byty.length)} bytů`;
   const why = Object.entries(skryto).map(([k, n]) => `${num(n)} ${k}`);
   $("#why").textContent = why.length ? "Navíc skryto: " + why.join(" · ") : "";
-  shown = 0; $("#list").innerHTML = rows.length ? "" : `<div class="empty">Nic neodpovídá filtrům. Zkuste některý povolit.</div>`;
+  $("#nInbox").textContent = num(DATA.byty.filter(b => !vyrizeno(b.id) && (S.view === "inbox" || !duvod(b))).length) ;
+  if (S.view === "inbox") $("#nInbox").textContent = num(rows.length);
+  if (jeMoje) { if (S.mapa) kresliMapu(); return; }
+  kbIdx = -1;
+  shown = 0; $("#list").innerHTML = rows.length ? "" : S.view === "inbox"
+    ? `<div class="empty">Hotovo – všechny byty podle filtrů máte vyřízené. Nové přibývají každých 30 minut.</div>`
+    : `<div class="empty">Nic neodpovídá filtrům. Zkuste některý povolit.</div>`;
   vic();
   if (S.mapa) kresliMapu();
 }
@@ -471,6 +564,128 @@ function vic() {
   $("#more").hidden = shown >= rows.length;
   $("#more").textContent = `Zobrazit další (${num(rows.length - shown)})`;
 }
+
+// --------------------------------------------------------- moje hledání --
+const STAVY = [["", "Napsáno / zajímá mě"], ["odpoved", "Odpověděli"], ["prohlidka", "Prohlídka"], ["beru", "Beru ✓"], ["zamitnuto", "Zamítnuto"]];
+function vyberStavu(id) {
+  return `<select class="inp" data-stav="${esc(id)}" aria-label="Stav" style="width:auto;min-height:32px;padding:4px 8px;font-size:13px">` +
+    STAVY.map(([k, n]) => `<option value="${k}"${(stav[id]?.s || "") === k ? " selected" : ""}>${n}</option>`).join("") + `</select>`;
+}
+function kresliMoje(ids) {
+  const byId = Object.fromEntries(DATA.byty.map(b => [b.id, b]));
+  const sloupce = {zajem: [], napsano: [], odpoved: [], prohlidka: [], konec: []};
+  for (const id of ids) {
+    const s = stav[id]?.s;
+    const k = s === "beru" || s === "zamitnuto" ? "konec" : s || (psano[id] ? "napsano" : "zajem");
+    sloupce[k].push(id);
+  }
+  const mini = id => {
+    const b = byId[id], x = b || snap[id] || {url: "#", id};
+    const nazev = x.dispozice ? [x.dispozice, x.plocha && `${x.plocha} m²`].filter(Boolean).join(", ") : x.nazev || "Byt";
+    const cena = b ? (b._odhad ? "≈ " : "") + kc(b._celkem) : x.celkem ? kc(x.celkem) : "";
+    const dniOdPsani = psano[id] ? Math.floor((Date.now() - new Date(psano[id])) / 864e5) : 0;
+    const pripomenout = psano[id] && !stav[id] && dniOdPsani >= 2;
+    return `<div class="mini${b ? "" : " gone"}" data-id="${esc(id)}">
+      <div class="r"><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(nazev)}</a><b>${esc(cena)}</b></div>
+      <div class="m">${esc(x.adresa || "")}${b ? "" : " · už není v nabídce"}</div>
+      <div class="m">${psano[id] ? `napsáno ${esc(datum(psano[id]))}` : "zatím nenapsáno"}${stav[id]?.d ? ` · změna ${esc(datum(stav[id].d))}` : ""}</div>
+      ${pripomenout ? `<div class="note">Bez odpovědi ${dniOdPsani} dní – zkuste napsat znovu nebo zavolat.</div>` : ""}
+      <div class="r">${vyberStavu(id)}${favs.has(id) ? `<button class="btn" data-act="unfav">Odebrat</button>` : ""}</div>
+    </div>`;
+  };
+  const sl = (k, nadpis) => `<div class="col"><h3>${nadpis}<span>${sloupce[k].length}</span></h3>${sloupce[k].map(mini).join("") || `<div class="m" style="color:var(--faint);font-size:13px">—</div>`}</div>`;
+  $("#moje").innerHTML = `<div class="tools">
+      <button class="btn" id="export">Uložit zálohu</button>
+      <button class="btn" id="import">Nahrát zálohu</button>
+      <span class="hint" style="margin:0;align-self:center">Oblíbené, stavy a šablona jsou jen v tomto prohlížeči – zálohou je přenesete na jiné zařízení.</span>
+    </div>
+    <div class="board">${sl("zajem", "Zajímá mě")}${sl("napsano", "Napsáno")}${sl("odpoved", "Odpověděli")}${sl("prohlidka", "Prohlídka")}${sl("konec", "Rozhodnuto")}</div>`;
+  $("#export").onclick = exportovat; $("#import").onclick = importovat;
+}
+function zmenStav(id, s) {
+  if (s) stav[id] = {s, d: dnes()}; else delete stav[id];
+  const b = DATA.byty.find(x => x.id === id); if (b) sledovat(b);
+  ulozVse(); render();
+}
+document.addEventListener("change", e => { const sel = e.target.closest("[data-stav]"); if (sel) zmenStav(sel.dataset.stav, sel.value); });
+$("#moje").addEventListener("click", e => {
+  const m = e.target.closest(".mini"); if (!m) return;
+  if (e.target.closest("[data-act=unfav]")) { favs.delete(m.dataset.id); ulozVse(); render(); }
+});
+
+// ----------------------------------------------------- záloha / přenos --
+const KLICE = ["byty.fav", "byty.hid", "byty.seen", "byty.psano", "byty.stav", "byty.snap", "byty.sablona", "byty2.filtr"];
+function exportovat() {
+  const data = Object.fromEntries(KLICE.map(k => [k, store.get(k, null)]));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], {type: "application/json"}));
+  a.download = `byty-zaloha-${dnes()}.json`; a.click();
+}
+function importovat() {
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = "application/json,.json";
+  inp.onchange = async () => {
+    try {
+      const d = JSON.parse(await inp.files[0].text());
+      for (const k of ["byty.fav", "byty.hid", "byty.seen"]) store.set(k, [...new Set([...store.get(k, []), ...(d[k] || [])])]);
+      for (const k of ["byty.psano", "byty.stav", "byty.snap"]) store.set(k, {...(d[k] || {}), ...store.get(k, {})});
+      if (d["byty.sablona"] && !store.get("byty.sablona", null)) store.set("byty.sablona", d["byty.sablona"]);
+      toast("Záloha nahraná."); setTimeout(() => location.reload(), 600);
+    } catch { toast("Soubor se nepodařilo načíst."); }
+  };
+  inp.click();
+}
+
+// --------------------------------------------------------------- hlídání --
+function repo() {   // tuzik727.github.io/byty -> tuzik727/byty
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/);
+  return m ? `${m[1]}/${location.pathname.split("/")[1]}` : "Tuzik727/byty";
+}
+function popisHledani() {
+  const c = [];
+  c.push(S.disp.length ? S.disp.join(", ") : "všechny dispozice");
+  if (S.cena < CENA_MAX) c.push(`do ${kc(S.cena)}`);
+  if (S.plocha) c.push(`od ${S.plocha} m²`);
+  if (S.bod) c.push(`do ${num(S.km)} km od ${S.bod.nazev || "bodu"}`);
+  c.push(`${S.osob} os.`);
+  return c.join(", ");
+}
+$("#hlidatBtn").onclick = () => {
+  let tema = store.get("byty.ntfy", null);
+  if (!tema) { tema = "byty-" + crypto.getRandomValues(new Uint32Array(2)).reduce((s, x) => s + x.toString(36), ""); store.set("byty.ntfy", tema); }
+  const [vl, nazev] = repo().split("/");
+  const q = new URLSearchParams(location.search); for (const k of ["v", "m", "s", "n", "f", "sk", "nk"]) q.delete(k);   // jen filtry, ne zobrazení
+  const odkaz = `https://${vl.toLowerCase()}.github.io/${nazev}/${q.toString() ? "?" + q : ""}`;
+  const telo = `Odkaz: ${odkaz}\nTéma: ${tema}\n\n(Vytvořeno z webu. Hlídání zrušíte zavřením tohoto issue.)`;
+  $("#tema-ntfy").textContent = tema;
+  $("#hlidatIssue").href = `https://github.com/${repo()}/issues/new?title=${encodeURIComponent("Hlídání: " + popisHledani())}&body=${encodeURIComponent(telo)}`;
+  $("#hlidatDlg").showModal();
+};
+$("#temaCopy").onclick = () => navigator.clipboard?.writeText($("#tema-ntfy").textContent).then(() => toast("Téma zkopírováno."), () => {});
+
+// ------------------------------------------------------------ klávesnice --
+let kbIdx = -1;
+function kbKarty() { return [...$$("#list .card")]; }
+function kbNa(i) {
+  const k = kbKarty(); if (!k.length) return;
+  if (i >= k.length && shown < rows.length) { vic(); return kbNa(i); }
+  kbIdx = Math.max(0, Math.min(i, k.length - 1));
+  k.forEach((c, j) => c.classList.toggle("kb", j === kbIdx));
+  k[kbIdx].scrollIntoView({block: "nearest", behavior: "smooth"});
+}
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input,textarea,select") || $("dialog[open]")) return;
+  const k = e.key.toLowerCase();
+  if (k === "?") { $("#keysDlg").showModal(); return; }
+  if (k === "/") { e.preventDefault(); $("#q").focus(); return; }
+  if (k === "1" || k === "2" || k === "3") { S.view = ["nabidky", "inbox", "moje"][+k - 1]; render(); return; }
+  if (k === "j") { e.preventDefault(); kbNa(kbIdx + 1); return; }
+  if (k === "k") { e.preventDefault(); kbNa(kbIdx - 1); return; }
+  const karta = kbKarty()[kbIdx]; if (!karta) return;
+  const tlac = {o: "[data-open]", f: "[data-act=fav]", x: "[data-act=hid]", n: "[data-act=psat]", m: "[data-act=map]"}[k];
+  if (tlac) { e.preventDefault(); karta.querySelector(tlac)?.click(); }
+});
+$("#keysBtn").onclick = () => $("#keysDlg").showModal();
+$$("[data-v]").forEach(t => t.onclick = () => { S.view = t.dataset.v; render(); });
 
 // ------------------------------------------------------------------ mapa --
 let map = null, vrstva = null, bodMarker = null, kruh = null, leaflet = null;
@@ -552,8 +767,7 @@ function zprava(b) {
   return (store.get("byty.sablona", null) || SABLONA).replace(/\{(\w+)\}/g, (m, k) => k in pole ? pole[k] : m);
 }
 async function napsat(b) {
-  seen.add(b.id); store.set("byty.seen", [...seen].slice(-3000));
-  psano[b.id] = new Date().toISOString().slice(0, 10); store.set("byty.psano", psano);
+  seen.add(b.id); psano[b.id] = dnes(); ulozVse();
   const kopie = navigator.clipboard?.writeText(zprava(b));   // spustit hned, ještě v rámci kliknutí
   window.open(b.url, "_blank", "noopener");
   let ok = false;
@@ -600,14 +814,26 @@ $("#reset").onclick = () => { Object.assign(S, VYCHOZI, {mapa: S.mapa}); $("#bod
 $("#list").onclick = e => {
   const card = e.target.closest(".card"); if (!card) return;
   const id = card.dataset.id, b = DATA.byty.find(x => x.id === id);
-  if (e.target.closest("[data-open]")) { seen.add(id); store.set("byty.seen", [...seen].slice(-3000)); card.classList.add("seen"); return; }
+  if (e.target.closest("[data-open]")) { seen.add(id); ulozVse(); card.classList.add("seen"); return; }
   const act = e.target.closest("[data-act]")?.dataset.act; if (!act) return;
   if (act === "map") { S.mapa = true; render(); nactiLeaflet().then(() => { map.setView([b.lat, b.lon], 16); }); return; }
-  if (act === "psat") { napsat(b); card.outerHTML = karta(b); return; }
-  const set = act === "fav" ? favs : hid;
-  set.has(id) ? set.delete(id) : set.add(id);
-  store.set("byty.fav", [...favs]); store.set("byty.hid", [...hid]);
+  if (act !== "fav" && act !== "hid" && act !== "psat") return;
+  if (act === "psat") { sledovat(b); napsat(b); }
+  else {
+    const set = act === "fav" ? favs : hid;
+    set.has(id) ? set.delete(id) : set.add(id);
+    if (act === "fav") sledovat(b);
+    ulozVse();
+  }
+  if (S.view === "inbox" && vyrizeno(id)) {   // vyřízeno -> pryč ze seznamu, fokus zůstane na dalším
+    const i = kbKarty().indexOf(card); card.remove();
+    $("#nInbox").textContent = num(Math.max(0, kbKarty().length + rows.length - shown));
+    $("#count").innerHTML = `<b>${num(Math.max(0, kbKarty().length + rows.length - shown))}</b> k vyřízení`;
+    if (kbIdx >= 0) kbNa(i);
+    return;
+  }
   card.outerHTML = karta(b);
+  if (kbIdx >= 0) kbNa(kbIdx);
 };
 
 render();
