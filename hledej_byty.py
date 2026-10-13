@@ -29,6 +29,7 @@ from urllib3.util.retry import Retry
 PAUZA_S = 0.7                # pauza mezi požadavky na detail (šetrnost k webům)
 DETAIL_V = 3                 # verze rozboru detailu; zvýšení = znovu stáhnout detaily
 LIMIT = int(os.environ.get("BYTY_LIMIT") or 0) or None
+KURZ_EUR = 25.0              # Kč za euro; při startu se načte aktuální kurz ČNB
 
 SLOZKA = Path(__file__).resolve().parent
 DB_SOUBOR = SLOZKA / "byty.db"
@@ -153,6 +154,8 @@ def _najdi_castku(t, klic, cena, vynech=None):
         elif not klic.search(za[:18]) or NE_POPLATKY.search(pred[-25:]):  # "4 500 Kč služby"
             continue
         kc = int(re.sub(r"\D", "", m.group(1)))
+        if re.match(r"\s*(,-+)?\s*(eur|€)", za):          # "600 Euro paušál" -> Kč
+            kc = round(kc * KURZ_EUR)
         ma_kc = re.match(r"\s*(,-+)?\s*(kc|czk|,-)", za)
         if (not 300 <= kc <= 15_000 or kc == cena or JEDNOTKA_NE.match(za)
                 or (1900 <= kc <= 2100 and not ma_kc)):
@@ -196,6 +199,18 @@ def nazev_z(x):
 
 
 # ---------------------------------------------------------------- SREALITY --
+def nacti_kurz_eur(s):
+    """Denní kurz ČNB (řádek "EMU|euro|1|EUR|24,390")."""
+    global KURZ_EUR
+    try:
+        t = s.get("https://www.cnb.cz/cs/financni-trhy/devizovy-trh/kurzy-devizoveho-trhu/"
+                  "kurzy-devizoveho-trhu/denni_kurz.txt", timeout=30).text
+        KURZ_EUR = float(re.search(r"\|EUR\|([\d,]+)", t).group(1).replace(",", "."))
+        log(f"Kurz EUR (ČNB): {KURZ_EUR}")
+    except Exception as ex:  # noqa: BLE001
+        log(f"Kurz EUR: nepodařilo se načíst ({ex}), beru {KURZ_EUR}")
+
+
 def sreality(s, zname):
     api = "https://www.sreality.cz/api/v1/estates"
     vysledky, offset, celkem = [], 0, None
@@ -231,7 +246,10 @@ def sreality(s, zname):
             metro_m=metro if metro and metro < 100_000 else None,   # 100000 = neznámo
             rk=bool(e.get("premise_id")),
         )
-        if hid not in zname:          # detail jen u nových inzerátů
+        if nazev_z(e.get("price_currency_cb")) == "EUR":   # price_czk už je přepočtená, ukážeme i eura
+            b.update(mena="EUR", cena_mena=cislo(e.get("price")))
+        # Detail jen u nových inzerátů (a jednou u eurových uložených dřív bez měny – poplatky v eurech).
+        if hid not in zname or (b.get("mena") and zname[hid] != "EUR"):
             time.sleep(PAUZA_S)
             try:
                 dt = s.get(f"{api}/{hid}", timeout=30).json()["result"]
@@ -243,7 +261,8 @@ def sreality(s, zname):
                     plocha=dt.get("usable_area") or dt.get("floor_area"),
                     patro=patro - 1 if isinstance(patro, int) else None,  # Sreality: přízemí = 1
                     vybaveni={"Ano": True, "Ne": False, "Částečně": "částečně"}.get(nazev_z(dt.get("furnished"))),
-                    kauce=dt.get("refundable_deposit"),
+                    kauce=round(dt["refundable_deposit"] * KURZ_EUR) if b.get("mena") and dt.get("refundable_deposit")
+                    else dt.get("refundable_deposit"),
                     od=dt.get("ready_date"),
                     vlozeno=dt.get("since"),
                     koureni=rb.get("koureni"), max2=rb.get("max2"), pro_par=rb.get("pro_par"), zvirata=rb.get("zvirata"),
@@ -266,7 +285,7 @@ BZ_QUERY = """query($offset:Int){ listAdverts(offerType:[PRONAJEM], estateType:[
   regionOsmIds:["R435514"], currency:CZK, limit:60, offset:$offset, order:TIMEORDER_DESC){
   totalCount list{ id uri disposition surface price charges deposit etage equipped availableFrom
   timeActivated gps{lat lng} address(locale:CS) roommate reserved description lift petFriendly
-  balconySurface terraceSurface loggiaSurface shortTerm originalPrice } } }"""
+  balconySurface terraceSurface loggiaSurface shortTerm originalPrice currency } } }"""
 
 VYBAVENI_BZ = {"VYBAVENY": True, "CASTECNE": "částečně", "NEVYBAVENY": False}
 
@@ -287,16 +306,19 @@ def bezrealitky(s, zname):
             if a.get("roommate"):
                 continue
             gps = a.get("gps") or {}
+            # Ceny jsou v měně inzerátu (filtr currency:CZK nepřepočítává) -> eura na Kč.
+            k = KURZ_EUR if a.get("currency") == "EUR" else 1
+            kc = lambda x: round(x * k) if x else x  # noqa: E731
             rb = rozbor(a.get("description"))
             disp = (a.get("disposition") or "").replace("DISP_", "").replace("_KK", "+kk").replace("_1", "+1")
             b = dict(
                 id=f"bezrealitky:{a['id']}", zdroj="Bezrealitky",
                 url=f"https://www.bezrealitky.cz/nemovitosti-byty-domy/{a['uri']}",
                 dispozice=dispozice(disp) or ("1+kk" if disp == "GARSONIERA" else None),
-                cena=a.get("price"), plocha=a.get("surface"),
+                cena=kc(a.get("price")), plocha=a.get("surface"),
                 adresa=a.get("address"), lat=gps.get("lat"), lon=gps.get("lng"),
                 patro=a.get("etage"), vybaveni=VYBAVENI_BZ.get(a.get("equipped")),
-                kauce=a.get("deposit"), od=ts_datum(a.get("availableFrom")),
+                kauce=kc(a.get("deposit")), od=ts_datum(a.get("availableFrom")),
                 vlozeno=ts_datum(a.get("timeActivated")),
                 rk=False, rezervovano=bool(a.get("reserved")),
                 koureni=rb.get("koureni"), max2=rb.get("max2"), pro_par=rb.get("pro_par"),
@@ -306,12 +328,14 @@ def bezrealitky(s, zname):
                 vytah=True if a.get("lift") else rb.get("vytah"),
                 venku=bool(a.get("balconySurface") or a.get("terraceSurface") or a.get("loggiaSurface"))
                 or rb.get("venku"),
-                cena_puvodni=a.get("originalPrice") if (a.get("originalPrice") or 0) > (a.get("price") or 0)
+                cena_puvodni=kc(a.get("originalPrice")) if (a.get("originalPrice") or 0) > (a.get("price") or 0)
                 else None,
                 detail_v=DETAIL_V,
             )
+            if k != 1:
+                b.update(mena="EUR", cena_mena=a.get("price"))
             if a.get("charges"):          # 0 = nevyplněno, ne "zdarma"
-                b.update(popl=a["charges"], popl_os=False, popl_info="z inzerátu")
+                b.update(popl=kc(a["charges"]), popl_os=False, popl_info="z inzerátu")
             else:
                 b.update(odhad_poplatku(b["cena"], a.get("description")))
             out.append(b)
@@ -346,6 +370,9 @@ def bazos(s, zname):
             bid = m.group(1)
             cena_txt = i.select_one("div.inzeratycena").get_text(" ", strip=True)
             cena = int(re.sub(r"\D", "", cena_txt)) if re.search(r"\d", cena_txt) else None
+            eur = cena and re.search(r"€|eur", cena_txt, re.I)
+            if eur:
+                cena = round(cena * KURZ_EUR)
             datum = re.search(r"\[(\d+)\.(\d+)\.\s*(\d{4})\]", i.get_text())
             plocha = re.search(r"(\d{2,3})\s*m(2|²)", nazev)
             b = dict(
@@ -353,6 +380,8 @@ def bazos(s, zname):
                 cena=cena, adresa=lok, plocha=int(plocha.group(1)) if plocha else None,
                 vlozeno=f"{datum.group(3)}-{int(datum.group(2)):02d}-{int(datum.group(1)):02d}" if datum else None,
             )
+            if eur:
+                b.update(mena="EUR", cena_mena=int(re.sub(r"\D", "", cena_txt)))
             if bid not in zname:
                 time.sleep(PAUZA_S)
                 try:
@@ -384,7 +413,8 @@ def bazos(s, zname):
 # --------------------------------------------------------------- DATABÁZE --
 SLOUPCE = ["zdroj", "url", "nazev", "dispozice", "cena", "popl", "popl_os", "popl_info", "plocha", "adresa",
            "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "vlozeno", "rk", "provize",
-           "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano", "detail_v"]
+           "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano", "detail_v",
+           "mena", "cena_mena"]
 STARE_SLOUPCE = ["km", "pozn_cena", "varovani", "popis", "poplatky"]   # z verze 1, už se nepoužívají
 
 
@@ -415,7 +445,11 @@ def uloz(db, byty, beh):
         else:
             # Aktualizuj jen to, co přišlo (detail se u starých nestahuje znovu).
             zmeny = {c: b[c] for c in SLOUPCE if b.get(c) is not None}
-            if stary["cena"] and b.get("cena") and b["cena"] != stary["cena"]:
+            if b.get("mena") or stary["mena"]:     # u eur se Kč mění s kurzem, to není zlevnění
+                zmeny["cena_puvodni"] = b.get("cena_puvodni")
+                if b.get("mena") is None:
+                    zmeny.update(mena=None, cena_mena=None)
+            elif stary["cena"] and b.get("cena") and b["cena"] != stary["cena"]:
                 zmeny["cena_puvodni"] = stary["cena_puvodni"] or stary["cena"]
             elif b.get("cena_puvodni"):
                 zmeny["cena_puvodni"] = b["cena_puvodni"]
@@ -429,7 +463,7 @@ def uloz(db, byty, beh):
 WEB_POLE = ["id", "zdroj", "url", "nazev", "dispozice", "cena", "popl", "popl_os", "popl_info", "plocha", "adresa",
             "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "vlozeno", "rk", "provize",
             "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano",
-            "cena_puvodni", "prvni_videni"]
+            "cena_puvodni", "prvni_videni", "mena", "cena_mena"]
 PORADI_ZDROJU = {"Bezrealitky": 0, "Sreality": 1, "Bazoš": 2}   # u duplicit vyhrává ten s nejvíc údaji
 
 
@@ -533,10 +567,11 @@ def main():
     beh = datetime.now().strftime("%Y-%m-%d %H:%M")
     log(f"=== Start ({beh}){f' LIMIT {LIMIT}' if LIMIT else ''} ===")
     s, db = session(), otevri_db()
+    nacti_kurz_eur(s)
     for nazev, fce in (("Sreality", sreality), ("Bezrealitky", bezrealitky), ("Bazoš", bazos)):
         try:
-            zname = {r["id"].split(":", 1)[1] for r in db.execute(
-                "SELECT id FROM byty WHERE zdroj=? AND detail_v>=?", (nazev, DETAIL_V))}
+            zname = {r["id"].split(":", 1)[1]: r["mena"] for r in db.execute(
+                "SELECT id, mena FROM byty WHERE zdroj=? AND detail_v>=?", (nazev, DETAIL_V))}
             byty = fce(s, zname)
             nove = uloz(db, byty, beh)
             # Co zdroj už nevrací, je pryč (pronajato/smazáno). Jen když zdroj prošel celý a bez chyby.

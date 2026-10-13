@@ -21,6 +21,8 @@ Autor: [Tuzik727](https://github.com/Tuzik727)
 - **Moje hledání.** Oblíbený, skrytý a kde jsem v jaký fázi: zajímá → napsáno → odpověděli → prohlídka → rozhodnuto.
 - **Napsat.** Jedním klikem zkopíruješ připravenou zprávu pro pronajímatele a byt se označí jako kontaktovanej.
 - **Hlídání.** Když se objeví novej byt podle tvých filtrů, pípne ti to na mobilu.
+- **Sdílet.** Oblíbený byty pošleš dál jedním odkazem. Druhej člověk uvidí jen je, nic nenastavuje. Nebo zkopíruješ seznam odkazů na inzeráty.
+- **Eura.** Inzeráty v eurech se přepočítaj na koruny denním kurzem ČNB a u bytu vidíš i původní cenu.
 - Mapa, klávesový zkratky (⌨), dark mode.
 
 Nikde se nepřihlašuješ. Všechno, co si nastavíš, zůstává jen u tebe v prohlížeči. Filtry jsou v odkazu, takže hledání můžeš poslat kámošovi.

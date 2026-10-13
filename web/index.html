@@ -44,6 +44,8 @@ button,input,select,textarea{font:inherit;color:inherit}
 /* rozložení: filtry | seznam | mapa */
 .app{display:grid;grid-template-columns:288px minmax(0,1fr);gap:0 24px;width:100%;min-height:100vh;padding:0 24px}
 .app.map-on{grid-template-columns:288px minmax(0,1fr) minmax(0,42%)}
+.app.vyber{grid-template-columns:minmax(0,1fr);align-content:start} .app.vyber.map-on{grid-template-columns:minmax(0,1fr) minmax(0,42%)}
+.app.vyber #filtry,.app.vyber .tabs,.app.vyber #ftoggle,.app.vyber #q,.app.vyber #hlidatBtn,.app.vyber #sdiletBtn{display:none}
 header{grid-column:1/-1;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 0 14px;border-bottom:1px solid var(--line);margin-bottom:16px}
 h1{font-size:16px;font-weight:650;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
 h1 .logo{width:22px;height:22px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:13px}
@@ -265,6 +267,7 @@ kbd{background:var(--soft);border:1px solid var(--line2);border-bottom-width:2px
         <option value="km">Nejblíž k místu</option>
       </select>
       <button class="btn" id="mapBtn">Mapa</button>
+      <button class="btn" id="sdiletBtn" title="Poslat oblíbené byty někomu dalšímu">Sdílet</button>
       <button class="btn" id="hlidatBtn" title="Posílat upozornění na nové byty podle těchto filtrů">🔔 Hlídat</button>
       <button class="btn" id="keysBtn" title="Klávesové zkratky" aria-label="Klávesové zkratky">⌨</button>
     </div>
@@ -288,6 +291,17 @@ kbd{background:var(--soft);border:1px solid var(--line2);border-bottom-width:2px
     <li>Do půl hodiny přijde potvrzení, pak každý nový byt podle současných filtrů. Hlídání zrušíte zavřením issue.</li>
   </ol>
   <p class="small">Téma v ntfy je veřejné – kdo ho zná, uvidí stejné notifikace. Hlídání od jiných lidí než vlastníka webu se spustí, až ho vlastník schválí štítkem <code>hlidani</code>.</p>
+  <form method="dialog" style="text-align:right"><button class="btn">Zavřít</button></form>
+</dialog>
+
+<dialog id="sdiletDlg">
+  <h2>Sdílet oblíbené byty</h2>
+  <p id="sdiletInfo"></p>
+  <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:14px">
+    <button class="btn pri" id="sdiletOdkaz" type="button">Kopírovat odkaz na výběr</button>
+    <button class="btn" id="sdiletSeznam" type="button">Kopírovat seznam inzerátů</button>
+  </div>
+  <p class="small"><b>Odkaz na výběr</b> otevře tenhle web jen s vašimi byty – druhý člověk nic nenastavuje. <b>Seznam inzerátů</b> jsou odkazy na Sreality, Bezrealitky a Bazoš, třeba do zprávy nebo mailu. Co sdílet, vyberete hvězdičkou ☆ Oblíbit.</p>
   <form method="dialog" style="text-align:right"><button class="btn">Zavřít</button></form>
 </dialog>
 
@@ -349,12 +363,24 @@ function doUrl() {
     else if (typeof d === "boolean") p.set(z, v ? "1" : "0");
     else p.set(z, v);
   }
+  if (VYBER) { history.replaceState(null, "", "?vyber=" + vyberParam(VYBER)); return; }
   const qs = p.toString();
   history.replaceState(null, "", qs ? "?" + qs : location.pathname);
   store.set("byty2.filtr", S);
 }
 
-const S = zUrl() || {...VYCHOZI, ...store.get("byty2.filtr", {})};
+// Sdílený výběr: ?vyber=s123,b456,z789 (s = Sreality, b = Bezrealitky, z = Bazoš) – ukáže jen tyto byty.
+const ZDROJ_ZK = {sreality: "s", bezrealitky: "b", bazos: "z"};
+const ZK_ZDROJ = Object.fromEntries(Object.entries(ZDROJ_ZK).map(([k, v]) => [v, k]));
+const VYBER = (() => {
+  const v = new URLSearchParams(location.search).get("vyber");
+  if (!v) return null;
+  return new Set(v.split(",").map(x => ZK_ZDROJ[x[0]] && ZK_ZDROJ[x[0]] + ":" + x.slice(1)).filter(Boolean));
+})();
+const vyberParam = ids => [...ids].map(id => { const [z, i] = id.split(":"); return (ZDROJ_ZK[z] || "") + i; }).filter(x => x.length > 1).join(",");
+
+const S = (VYBER ? null : zUrl()) || {...VYCHOZI, ...store.get("byty2.filtr", {})};
+if (VYBER) { S.view = "nabidky"; $("#app").classList.add("vyber"); }
 let favs = new Set(store.get("byty.fav", [])), hid = new Set(store.get("byty.hid", [])), seen = new Set(store.get("byty.seen", []));
 const psano = store.get("byty.psano", {});   // id -> datum, kdy jsem napsal
 const stav = store.get("byty.stav", {});     // id -> {s: odpoved|prohlidka|beru|zamitnuto, d: datum}
@@ -444,7 +470,8 @@ function duvod(b) {
 function filtruj() {
   const skryto = {};
   rows = [];
-  for (const b of DATA.byty) {
+  if (VYBER) rows = DATA.byty.filter(b => VYBER.has(b.id));
+  else for (const b of DATA.byty) {
     const d = duvod(b);
     if (!d) rows.push(b);
     else if (d !== true) skryto[d] = (skryto[d] || 0) + 1;
@@ -508,6 +535,7 @@ function karta(b) {
       <div class="addr">${esc(misto)}</div></div>
     <div class="price"><div class="total">${b._odhad ? "≈ " : ""}${kc(b._celkem)}</div>
       <div class="parts">${b._odhad ? `nájem ${kc(b.cena)} + poplatky odhadem` : `nájem ${kc(b.cena)} + ${kc(b._popl)}`}${b._m2 ? ` · ${num(Math.round(b._m2))} Kč/m²` : ""}</div>
+      ${b.mena ? `<div class="parts" title="Inzerát je v eurech, přepočteno denním kurzem ČNB">nájem ${num(b.cena_mena)} € · přepočteno na Kč</div>` : ""}
       ${b.cena_puvodni && b.cena_puvodni > b.cena ? `<div class="drop">↓ zlevněno z ${kc(b.cena_puvodni)}</div>` : ""}</div>
     <div class="tags">${tags.join("")}</div>
     <div class="acts">
@@ -548,7 +576,11 @@ function render() {
 
   for (const b of DATA.byty) spocitej(b);
   const skryto = filtruj();
-  $("#count").innerHTML = `<b>${num(rows.length)}</b> z ${num(DATA.byty.length)} bytů`;
+  $("#count").innerHTML = VYBER
+    ? `Sdílený výběr: <b>${num(rows.length)}</b> ${rows.length === 1 ? "byt" : rows.length < 5 ? "byty" : "bytů"}` +
+      (VYBER.size > rows.length ? ` · ${num(VYBER.size - rows.length)} už není v nabídce` : "") +
+      ` · <a href="${location.pathname}">Zobrazit všechny nabídky</a>`
+    : `<b>${num(rows.length)}</b> z ${num(DATA.byty.length)} bytů`;
   const why = Object.entries(skryto).map(([k, n]) => `${num(n)} ${k}`);
   $("#why").textContent = why.length ? "Navíc skryto: " + why.join(" · ") : "";
   $("#nInbox").textContent = num(DATA.byty.filter(b => !vyrizeno(b.id) && (S.view === "inbox" || !duvod(b))).length) ;
@@ -664,6 +696,35 @@ $("#hlidatBtn").onclick = () => {
   $("#hlidatDlg").showModal();
 };
 $("#temaCopy").onclick = () => navigator.clipboard?.writeText($("#tema-ntfy").textContent).then(() => toast("Téma zkopírováno."), () => {});
+
+// ---------------------------------------------------------------- sdílení --
+function sdileneByty() {   // oblíbené: aktuální údaje, nebo uložená kopie, když inzerát mezitím zmizel
+  const byId = Object.fromEntries((DATA?.byty || []).map(b => [b.id, b]));
+  return [...favs].map(id => byId[id] || snap[id]).filter(Boolean);
+}
+function kopiruj(text, hlaska) {
+  navigator.clipboard?.writeText(text).then(() => toast(hlaska), () => toast("Kopírování se nepovedlo."));
+}
+$("#sdiletBtn").onclick = () => {
+  const n = sdileneByty().length;
+  $("#sdiletInfo").textContent = n ? `Máte ${n} ${n === 1 ? "oblíbený byt" : n < 5 ? "oblíbené byty" : "oblíbených bytů"}.`
+                                   : "Zatím nemáte žádné oblíbené byty. Označte je ☆ Oblíbit a pak se sem vraťte.";
+  $("#sdiletOdkaz").disabled = $("#sdiletSeznam").disabled = !n;
+  $("#sdiletDlg").showModal();
+};
+$("#sdiletOdkaz").onclick = () => {
+  const [vl, nazev] = repo().split("/");
+  const zaklad = location.hostname.endsWith("github.io") ? location.origin + location.pathname : `https://${vl.toLowerCase()}.github.io/${nazev}/`;
+  kopiruj(`${zaklad}?vyber=${vyberParam(sdileneByty().map(b => b.id))}`, "Odkaz zkopírován – pošlete ho komu chcete.");
+};
+$("#sdiletSeznam").onclick = () => {
+  const radky = sdileneByty().map(b => {
+    const co = [b.dispozice === "pokoj" ? "Pokoj" : b.dispozice || b.nazev, b.plocha && `${b.plocha} m²`].filter(Boolean).join(", ");
+    const cena = b._celkem ?? b.celkem;
+    return `${[co, b.adresa, cena ? (b._odhad ?? b.odhad ? "≈ " : "") + kc(cena) : ""].filter(Boolean).join(" · ")}\n${b.url}`;
+  });
+  kopiruj(radky.join("\n\n"),`Zkopírováno ${radky.length} inzerátů.`);
+};
 
 // ------------------------------------------------------------ klávesnice --
 let kbIdx = -1;
