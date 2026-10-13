@@ -1,57 +1,62 @@
 # Byty Praha – pronájmy
 
-Rychlý a přehledný přehled bytů k pronájmu v Praze z více portálů na jednom místě, s chytrými filtry.
+👉 **https://tuzik727.github.io/byty/**
 
-**Web:** https://tuzik727.github.io/byty/
-**Autor:** [Tuzik727](https://github.com/Tuzik727)
+Nebaví mě Sreality a spol. Jsou nepřehledný a stejnej byt tam vidíš pětkrát. Tak jsem si udělal vlastní web. Rychlej, jednoduchej, přehlednej a s filtrama, který fakt pomůžou najít byt.
 
-## Co umí
+Autor: [Tuzik727](https://github.com/Tuzik727)
 
-- **Jeden seznam ze tří zdrojů:** Sreality, Bezrealitky a Bazoš. Stejný byt, který je na více portálech, se zobrazí jen jednou, s odkazy na všechny.
-- **Chytré filtry:**
-  - **Základní:** dispozice, cena, počet osob, plocha, vzdálenost od zvoleného místa.
-  - **Z popisu inzerátu:** kouření, zvířata, venkovní prostor, výtah, vybavení, bez realitky / bez provize, termín nastěhování.
-  - Web vždy napíše, kolik bytů a proč navíc skryl.
-- **Cena vůči okolí:** porovná cenu za m² s podobnými byty do 1,5 km a upozorní na podezřele levné nabídky.
-- **Moje hledání:** oblíbené, skryté a stav (zajímá → napsáno → odpověděli → prohlídka → rozhodnuto).
-- **Napsat:** zkopíruje připravenou zprávu pronajímateli a byt si označí jako kontaktovaný.
-- **Mapa, klávesové zkratky (⌨), tmavý i světlý režim.**
-- **Hlídání:** push notifikace do mobilu (ntfy) o nových bytech podle uložených filtrů.
+## Co to umí
 
-Nastavení i seznamy se ukládají jen v prohlížeči. Filtry jsou v adrese stránky, takže hledání jde poslat odkazem. Zálohu udělá export a import.
+- **Všechno na jednom místě.** Sreality, Bezrealitky i Bazoš. Když je byt na víc portálech, ukáže se jen jednou.
+- **Chytrý filtry.** Kromě ceny, dispozice a plochy:
+  - jestli se smí kouřit nebo mít zvíře,
+  - jestli je tam balkon nebo terasa a výtah,
+  - jestli je to bez realitky a bez provize,
+  - kdy se dá nastěhovat,
+  - jak daleko je to od místa, který si vybereš.
 
-## Jak to funguje
+  A web ti vždycky řekne, co a proč skryl, nic nezmizí potichu.
+- **Je to levný, nebo drahý?** U každýho bytu vidíš, jak je na tom cenou proti bytům okolo. Podezřele levný věci jsou označený.
+- **Moje hledání.** Oblíbený, skrytý a kde jsem v jaký fázi: zajímá → napsáno → odpověděli → prohlídka → rozhodnuto.
+- **Napsat.** Jedním klikem zkopíruješ připravenou zprávu pro pronajímatele a byt se označí jako kontaktovanej.
+- **Hlídání.** Když se objeví novej byt podle tvých filtrů, pípne ti to na mobilu.
+- Mapa, klávesový zkratky (⌨), dark mode.
 
-Celé to běží zdarma na GitHubu, bez vlastního serveru.
-
-- **Stahování:** GitHub Actions ([`.github/workflows/byty.yml`](.github/workflows/byty.yml)) spouští `hledej_byty.py` plánovaně, každých ~30 minut. GitHub plánované běhy u zdarma účtů zpožďuje nebo vynechává.
-- **Co skript dělá:** stáhne nabídky, porovná je s databází `byty.db` a zapíše `web/byty.json`.
-- **Data:** databáze a JSON se ukládají do větve `data`, kde je jen poslední verze bez historie.
-- **Web:** `web/index.html` je jediný statický soubor (čisté JS, mapa Leaflet + OpenStreetMap) a nasazuje se na GitHub Pages.
-- **Popisy inzerátů** se neukládají ani nezveřejňují. Při stažení se z nich jen vyčtou fakta (poplatky, kouření, zvířata, provize…).
+Nikde se nepřihlašuješ. Všechno, co si nastavíš, zůstává jen u tebe v prohlížeči. Filtry jsou v odkazu, takže hledání můžeš poslat kámošovi.
 
 ## Hlídání
 
-1. Nainstalujte si aplikaci [ntfy](https://ntfy.sh).
-2. Na webu nastavte filtry a klikněte na **🔔 Hlídat**.
-3. Web vytvoří předvyplněné issue „Hlídání: …“ s odkazem na hledání a tématem pro ntfy. Stačí ho odeslat (je potřeba účet na GitHubu).
+1. Stáhni si appku [ntfy](https://ntfy.sh).
+2. Na webu si nastav filtry a klikni na **🔔 Hlídat**.
+3. Otevře se předvyplněný formulář na GitHubu. Stačí ho odeslat (potřebuješ účet na GitHubu).
 
-Po každém stažení `hlidani.py` pošle notifikaci o nových bytech, které hledání odpovídají. Nic nepřijde dvakrát. Zpracují se jen issue od vlastníka repa, nebo issue se štítkem `hlidani`.
+Hotovo. Každej novej byt ti přijde jen jednou.
 
-## Spuštění lokálně
+## Jak to běží
+
+Celý to jede zdarma na GitHubu, žádnej server.
+
+- GitHub Actions zhruba každou půlhodinu stáhne nový nabídky. GitHub to někdy zpozdí nebo vynechá, to je daň za zadarmo.
+- Data leží ve větvi `data`.
+- Web je jeden HTML soubor na GitHub Pages.
+- Popisy inzerátů neukládám. Vytáhnu z nich jen to důležitý: poplatky, kouření, zvířata, provizi…
+
+## Spuštění u sebe
 
 ```
 pip install -r requirements.txt
 python -X utf8 hledej_byty.py      # nebo spust.bat
+python -m http.server -d web       # pak otevři http://localhost:8000
 ```
 
-`BYTY_LIMIT=N` omezí počet inzerátů na zdroj, hodí se na rychlý test. Web pak otevřete přes lokální server, třeba `python -m http.server -d web`.
+Na rychlej test nastav `BYTY_LIMIT=50`. Stáhne se jen pár inzerátů z každýho webu.
 
-## Soubory
+## Co je co
 
 | Soubor | Co dělá |
 |---|---|
-| `hledej_byty.py` | stažení, rozbor inzerátů, sloučení duplicit, cena vůči okolí, `web/byty.json` |
-| `hlidani.py` | hlídání: čte issue, filtruje stejně jako web, posílá ntfy notifikace |
-| `web/index.html` | celý web |
-| `.github/workflows/byty.yml` | plánované stahování a nasazení webu |
+| `hledej_byty.py` | stahuje byty, čte z popisů, slučuje duplicity, počítá cenu proti okolí |
+| `hlidani.py` | posílá notifikace o nových bytech |
+| `web/index.html` | celej web |
+| `.github/workflows/byty.yml` | pravidelný stahování a nasazení webu |
