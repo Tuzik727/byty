@@ -168,6 +168,9 @@ textarea.inp{resize:vertical;min-height:120px;font-size:13px;line-height:1.45}
   .theme{margin-left:auto}
 }
 /* záložky, moje hledání, dialog */
+.seg{display:flex;gap:2px;background:var(--soft);border:1px solid var(--line);border-radius:9px;padding:2px;margin-top:8px}
+.seg button{flex:1;border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;padding:6px 4px;border-radius:7px;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--card);color:var(--text);box-shadow:var(--shadow)}
 .tabs{display:flex;gap:2px;background:var(--soft);border:1px solid var(--line);border-radius:9px;padding:2px}
 .tab{border:0;background:none;border-radius:7px;padding:4px 12px;cursor:pointer;font-size:13.5px;color:var(--muted);min-height:28px;white-space:nowrap}
 .tab[aria-pressed=true]{background:var(--card);color:var(--text);font-weight:600;box-shadow:var(--shadow)}
@@ -229,8 +232,12 @@ kbd{background:var(--soft);border:1px solid var(--line2);border-bottom-width:2px
       </form>
       <div class="hint" id="bodInfo">Nebo klikněte do mapy.</div>
       <div id="kmBox" hidden>
-        <div class="fl" style="margin-top:8px">Vzdušnou čarou do <b id="kmV"></b></div>
-        <input type="range" id="km" min="1" max="20" step="0.5" aria-label="Maximální vzdálenost">
+        <div class="seg" id="doj" role="group" aria-label="Jak měřit vzdálenost">
+          <button data-doj="km">Vzdušně</button><button data-doj="auto">🚗 Autem</button><button data-doj="mhd">🚇 MHD</button>
+        </div>
+        <div class="fl" style="margin-top:10px"><span id="kmL"></span> <b id="kmV"></b></div>
+        <input type="range" id="km" aria-label="Maximální vzdálenost nebo doba cesty">
+        <div class="hint" id="dojInfo"></div>
       </div>
     </div>
     <div class="fs">
@@ -242,6 +249,7 @@ kbd{background:var(--soft);border:1px solid var(--line2);border-bottom-width:2px
       <div class="fl">Byt musí mít</div>
       <label class="ck"><input type="checkbox" data-c="venku">Balkon, lodžii nebo terasu</label>
       <label class="ck"><input type="checkbox" data-c="vytah">Výtah</label>
+      <label class="ck"><input type="checkbox" data-c="park">Kde parkovat<small>garáž, stání, nebo ulice bez placené zóny</small></label>
       <label class="ck"><input type="checkbox" data-c="vybaveny">Vybavení (i částečné)</label>
       <label class="ck"><input type="checkbox" data-c="nevybaveny">Bez vybavení</label>
     </div>
@@ -366,10 +374,10 @@ const DISP = [["1+kk","1+kk"],["1+1","1+1"],["2+kk","2+kk"],["2+1","2+1"],["3+kk
 const VYCHOZI = {disp: [], cena: CENA_MAX, osob: 2, plocha: 0, bod: null, km: 5, q: "", sort: "cena",
   kourim: false, zvire: false, venku: false, vytah: false, vybaveny: false, nevybaveny: false,
   bezrk: false, bezprov: false, od: "", nove: false, fav: false, znamePopl: false, kratke: false,
-  rezerv: false, skryte: false, nekontakt: false, mapa: false, view: "nabidky"};
+  rezerv: false, skryte: false, nekontakt: false, mapa: false, view: "nabidky", doj: "km", min: 30, park: false};
 const ZKRATKY = {disp:"d", cena:"c", osob:"o", plocha:"p", bod:"b", km:"k", q:"q", sort:"s", kourim:"ko",
   zvire:"zv", venku:"ve", vytah:"vy", vybaveny:"vb", nevybaveny:"nv", bezrk:"rk", bezprov:"pr", od:"od",
-  nove:"n", fav:"f", znamePopl:"zp", kratke:"kr", rezerv:"re", skryte:"sk", nekontakt:"nk", mapa:"m", view:"v"};
+  nove:"n", fav:"f", znamePopl:"zp", kratke:"kr", rezerv:"re", skryte:"sk", nekontakt:"nk", mapa:"m", view:"v", doj:"dj", min:"mi", park:"pk"};
 
 function zUrl() {   // nastavení v odkazu má přednost (dá se sdílet), jinak poslední vlastní
   const p = new URLSearchParams(location.search);
@@ -469,6 +477,7 @@ function spocitej(b) {
   b._celkem = b.cena + (popl || 0);
   b._m2 = b.plocha ? b._celkem / b.plocha : null;
   b._km = vzdalenost(b);
+  b._min = S.bod && S.doj !== "km" && DOJ.klic === dojKlic() && !DOJ.chyba && b.lat != null ? DOJ.min.get(b.id) ?? null : undefined;
 }
 const dispSkup = b => !b.dispozice ? "?" : /^[4-9]/.test(b.dispozice) ? "4+" : b.dispozice;
 
@@ -478,7 +487,9 @@ function duvod(b) {
   if (S.disp.length ? !S.disp.includes(dispSkup(b)) : dispSkup(b) === "pokoj") return true;
   if (S.cena < CENA_MAX && b._celkem > S.cena) return true;
   if (S.plocha && (b.plocha ?? 0) < S.plocha) return true;
-  if (S.bod && b._km != null && b._km > S.km) return true;
+  if (S.bod && S.doj === "km" && b._km != null && b._km > S.km) return true;
+  if (b._min === null || b._min > S.min) return true;      // dojezd: nedostupné nebo moc daleko (byty bez polohy zůstanou)
+  if (S.park && !(b.garaz || b.parkovani || b.zona === "zdarma")) return true;
   if (S.q && !(b.adresa || "").toLowerCase().includes(S.q.toLowerCase())) return true;
   if (S.venku && !b.venku) return true;
   if (S.vytah && b.vytah !== true) return true;
@@ -514,7 +525,7 @@ function filtruj() {
     m2: (a, b) => (a._m2 ?? 1e9) - (b._m2 ?? 1e9),
     nove: (a, b) => b.prvni_videni.localeCompare(a.prvni_videni) || (b.vlozeno || "").localeCompare(a.vlozeno || ""),
     plocha: (a, b) => (b.plocha ?? 0) - (a.plocha ?? 0),
-    km: (a, b) => (a._km ?? 1e9) - (b._km ?? 1e9),
+    km: (a, b) => (a._min ?? 1e9) - (b._min ?? 1e9) || (a._km ?? 1e9) - (b._km ?? 1e9),
     vyhodne: (a, b) => (a.rel ?? 9) - (b.rel ?? 9) || a._celkem - b._celkem,
   }[S.bod || S.sort !== "km" ? S.sort : "cena"];
   rows.sort(cmp);
@@ -547,6 +558,11 @@ function karta(b) {
   if (b.vybaveni === "částečně") t("", "částečně vybavený");
   if (b.vybaveni === false) t("", "nevybavený");
   if (b.metro_m) t("", `metro ${num(b.metro_m)} m`);
+  if (b.garaz) t("good", "garáž");
+  else if (b.parkovani) t("good", "parkovací stání");
+  if (b.zona === "zdarma") t("good", "parkování na ulici zdarma");
+  else if (b.zona === "modra") t("", "modrá zóna – parkování s rezidentní kartou");
+  else if (b.zona === "placena") t("warn", "placené parkování");
   if (b.od) t("", b.od <= DATA.aktualizovano.slice(0, 10) ? "volné ihned" : `volné od ${datum(b.od)}`);
   if (b.kauce) t("", `kauce ${kc(b.kauce)}`);
   if (b.koureni === false) t("bad", "zákaz kouření");
@@ -559,7 +575,9 @@ function karta(b) {
   if (b.popl_os) t("warn", `poplatky za osobu (×${S.osob})`);
   if (b.popl_info && /1–2 osoby/.test(b.popl_info) && S.osob >= 3) t("warn", "poplatky uvedeny pro 1–2 osoby");
 
-  const misto = [b.adresa, b._km != null ? `${b._km.toFixed(1).replace(".", ",")} km` : "", b.patro != null ? (b.patro < 0 ? "suterén" : b.patro === 0 ? "přízemí" : `${b.patro}. patro`) : ""].filter(Boolean).join(" · ");
+  const cesta = b._min != null ? (S.doj === "auto" ? `🚗 do ${b._min} min` : `🚇 ${b._min} min`)
+              : b._km != null ? `${b._km.toFixed(1).replace(".", ",")} km` : "";
+  const misto = [b.adresa, cesta, b.patro != null ? (b.patro < 0 ? "suterén" : b.patro === 0 ? "přízemí" : `${b.patro}. patro`) : ""].filter(Boolean).join(" · ");
   const nazev = b.dispozice ? [b.dispozice === "pokoj" ? "Pokoj" : b.dispozice, b.plocha && `${b.plocha} m²`].filter(Boolean).join(", ")
                             : b.nazev || "Byt" + (b.plocha ? `, ${b.plocha} m²` : "");
   const zdroje = [{zdroj: b.zdroj, url: b.url}, ...(b.dalsi || [])].map(z => `<a href="${esc(z.url)}" target="_blank" rel="noopener" data-open>${esc(z.zdroj)}</a>`).join(" · ");
@@ -590,7 +608,16 @@ function render() {
   $("#osobV").textContent = S.osob;
   $("#osobHint").textContent = S.osob >= 3 ? "Byty „max. 2 osoby“ se skryjí, poplatky za osobu se násobí." : "Poplatky uvedené za osobu se násobí.";
   $("#plocha").value = S.plocha; $("#plochaV").textContent = S.plocha ? S.plocha + " m²" : "jakákoli";
-  $("#kmBox").hidden = !S.bod; $("#km").value = S.km; $("#kmV").textContent = num(S.km) + " km";
+  $("#kmBox").hidden = !S.bod;
+  $$("#doj [data-doj]").forEach(t => t.setAttribute("aria-pressed", S.doj === t.dataset.doj));
+  const vMin = S.doj !== "km";
+  Object.assign($("#km"), vMin ? {min: 10, max: 90, step: 5} : {min: 1, max: 20, step: .5});
+  $("#km").value = vMin ? S.min : S.km;
+  $("#kmL").textContent = {km: "Vzdušnou čarou do", auto: "Autem do", mhd: "MHD do"}[S.doj];
+  $("#kmV").textContent = vMin ? S.min + " min" : num(S.km) + " km";
+  $("#dojInfo").textContent = !S.bod || !vMin ? "" : DOJ.klic !== dojKlic() ? "Počítám dojezd…" : DOJ.chyba ||
+    (S.doj === "auto" ? "Bez provozu a zácp (volná silnice)." : `Ráno ve všední den, příjezd do 8:30 (jízdní řád PID${DOJ.den ? " " + DOJ.den : ""}). Chůze k zastávkám je započtená.`);
+  if (DATA && S.bod && vMin && DOJ.klic !== dojKlic() && DOJ.pocita !== dojKlic()) spocitejDojezd();
   $("#bodInfo").textContent = S.bod ? `📍 ${S.bod.nazev || "bod z mapy"}` : "Nebo klikněte do mapy.";
   if (S.bod && document.activeElement !== $("#bodQ") && !$("#bodQ").value) $("#bodQ").value = S.bod.nazev || "";
   $$("[data-c]").forEach(c => c.checked = S[c.dataset.c]);
@@ -714,7 +741,8 @@ function popisHledani() {
   c.push(S.disp.length ? S.disp.join(", ") : "všechny dispozice");
   if (S.cena < CENA_MAX) c.push(`do ${kc(S.cena)}`);
   if (S.plocha) c.push(`od ${S.plocha} m²`);
-  if (S.bod) c.push(`do ${num(S.km)} km od ${S.bod.nazev || "bodu"}`);
+  if (S.bod) c.push(S.doj === "km" ? `do ${num(S.km)} km od ${S.bod.nazev || "bodu"}`
+                                    : `do ${S.min} min ${S.doj === "auto" ? "autem" : "MHD"} od ${S.bod.nazev || "bodu"}`);
   c.push(`${S.osob} os.`);
   return c.join(", ");
 }
@@ -826,6 +854,10 @@ function geoVybrany() {   // vybraný byt zvlášť, aby ho nikdy neschoval shlu
 function geoBod() {
   if (!S.bod) return {type: "FeatureCollection", features: []};
   const {lat, lon} = S.bod, kruh = [];
+  const stred = {type: "Feature", geometry: {type: "Point", coordinates: [lon, lat]}};
+  if (S.doj === "auto") return {type: "FeatureCollection", features: [stred,
+    ...(DOJ.klic === dojKlic() && DOJ.oblast ? [{type: "Feature", geometry: DOJ.oblast}] : [])]};
+  if (S.doj === "mhd") return {type: "FeatureCollection", features: [stred]};
   for (let i = 0; i <= 72; i++) {
     const a = i / 72 * 2 * Math.PI;
     kruh.push([lon + S.km / (111.32 * Math.cos(lat * Math.PI / 180)) * Math.cos(a), lat + S.km / 110.57 * Math.sin(a)]);
@@ -843,9 +875,9 @@ function pridejVrstvy() {   // po každém načtení stylu (i po přepnutí svě
     map.addImage("pil-" + k, ...pilulka(css(bg), k === "zakl" ? css("--line2") : css(bg)));
   }
   map.addSource("bod", {type: "geojson", data: geoBod()});
-  map.addLayer({id: "bod-plocha", type: "fill", source: "bod", filter: ["==", ["geometry-type"], "Polygon"],
+  map.addLayer({id: "bod-plocha", type: "fill", source: "bod", filter: ["in", ["geometry-type"], ["literal", ["Polygon", "MultiPolygon"]]],
     paint: {"fill-color": css("--accent"), "fill-opacity": .06}});
-  map.addLayer({id: "bod-kruh", type: "line", source: "bod", filter: ["==", ["geometry-type"], "Polygon"],
+  map.addLayer({id: "bod-kruh", type: "line", source: "bod", filter: ["in", ["geometry-type"], ["literal", ["Polygon", "MultiPolygon"]]],
     paint: {"line-color": css("--accent"), "line-width": 1.5, "line-dasharray": [2, 2]}});
   map.addSource("byty", {type: "geojson", data: geoByty(), cluster: true, clusterRadius: 46, clusterMaxZoom: 16});
   map.addLayer({id: "shluky", type: "circle", source: "byty", filter: ["has", "point_count"], paint: {
@@ -934,6 +966,93 @@ async function ukazNaMape(b) {
   vyber(b.id);
 }
 
+// ------------------------------------------------------------- dojezd --
+// Autem: izochrony z veřejné Valhally (OSM, bez provozu). MHD: jízdní řád PID (mhd.bin) a algoritmus CSA
+// pozpátku od cíle – pro každou zastávku nejpozdější odjezd, aby člověk byl na místě v 8:30.
+const DOJ = {klic: "", pocita: "", min: new Map(), oblast: null, chyba: "", den: ""};
+const dojKlic = () => S.bod ? `${S.doj}|${S.bod.lat.toFixed(5)},${S.bod.lon.toFixed(5)}|${S.doj === "auto" ? S.min : ""}` : "";
+const metry = (la1, lo1, la2, lo2) => Math.hypot((la1 - la2) * 111320, (lo1 - lo2) * 111320 * Math.cos(la1 * Math.PI / 180));
+const S_ZA_M = 0.9;   // pěšky 5 km/h a cesta o čtvrtinu delší než vzdušnou čarou
+
+let MHD = null;
+async function nactiMhd() {
+  if (MHD) return MHD;
+  const r = await fetch("mhd.bin", {cache: "no-cache"});
+  if (!r.ok) throw new Error("mhd.bin " + r.status);
+  const buf = await r.arrayBuffer();
+  const [, n, c, f, den] = new Uint32Array(buf, 0, 5);
+  let o = 20;
+  const zast = new Int32Array(buf, o, 2 * n); o += 8 * n;
+  const zac = new Uint32Array(buf, o, n + 1); o += 4 * (n + 1);
+  const spoje = new Uint16Array(buf, o, 6 * c); o += 12 * c;
+  const chuze = new Uint16Array(buf, o, 2 * f);
+  const mriz = new Map();   // zastávky v mřížce ~1 km
+  for (let i = 0; i < n; i++) {
+    const k = Math.floor(zast[2 * i] / 1000) + "," + Math.floor(zast[2 * i + 1] / 1500);
+    (mriz.get(k) || mriz.set(k, []).get(k)).push(i);
+  }
+  const d = String(den);
+  return MHD = {n, c, zast, zac, spoje, chuze, mriz, den: `${+d.slice(6)}. ${+d.slice(4, 6)}. ${d.slice(0, 4)}`};
+}
+function mhdMinuty(m, bod) {
+  const T = 7200, L = new Float64Array(m.n).fill(-Infinity), {zast, zac, chuze, spoje} = m;
+  const lat = i => zast[2 * i] / 1e5, lon = i => zast[2 * i + 1] / 1e5;
+  const chuzeZ = i => { for (let k = zac[i]; k < zac[i + 1]; k++) { const t = chuze[2 * k], v = L[i] - chuze[2 * k + 1]; if (v > L[t]) L[t] = v; } };
+  for (let i = 0; i < m.n; i++) { const d = metry(lat(i), lon(i), bod.lat, bod.lon); if (d <= 1500) L[i] = T - d * S_ZA_M; }
+  for (let i = 0; i < m.n; i++) if (L[i] > -Infinity) chuzeZ(i);
+  const jede = new Uint8Array(65536);
+  for (let i = 0; i < m.c; i++) {
+    const z = spoje[6 * i], kam = spoje[6 * i + 1], j = spoje[6 * i + 2], odj = spoje[6 * i + 3], pri = spoje[6 * i + 4];
+    if (pri > T) continue;
+    if (jede[j] || L[kam] >= pri) { jede[j] = 1; if (odj > L[z]) { L[z] = odj; chuzeZ(z); } }
+  }
+  const out = new Map();
+  for (const b of DATA.byty) {
+    if (b.lat == null) continue;
+    let nej = T - metry(b.lat, b.lon, bod.lat, bod.lon) * S_ZA_M;   // celou cestu pěšky
+    const bx = Math.floor(b.lat * 100), by = Math.floor(b.lon * 1e5 / 1500);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++)
+      for (const i of m.mriz.get((bx + dx) + "," + (by + dy)) || []) {
+        if (L[i] === -Infinity) continue;
+        const d = metry(b.lat, b.lon, lat(i), lon(i));
+        if (d <= 1200) nej = Math.max(nej, L[i] - d * S_ZA_M);
+      }
+    const min = Math.round((T - nej) / 60);
+    out.set(b.id, min <= 120 ? Math.max(min, 1) : null);
+  }
+  return out;
+}
+function vPolygonu(lon, lat, geom) {   // Polygon i MultiPolygon, s dírami
+  const poly = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+  const vKruhu = k => { let v = false; for (let i = 0, j = k.length - 1; i < k.length; j = i++)
+    if ((k[i][1] > lat) !== (k[j][1] > lat) && lon < (k[j][0] - k[i][0]) * (lat - k[i][1]) / (k[j][1] - k[i][1]) + k[i][0]) v = !v; return v; };
+  return poly.some(p => vKruhu(p[0]) && !p.slice(1).some(vKruhu));
+}
+async function autoMinuty(bod, max) {
+  const casy = [...new Set([Math.round(max / 3 / 5) * 5, Math.round(max * 2 / 3 / 5) * 5, max])].filter(x => x > 0).sort((a, b) => a - b);
+  const q = {locations: [{lat: bod.lat, lon: bod.lon}], costing: "auto", contours: casy.map(time => ({time})), polygons: true};
+  const r = await fetch("https://valhalla1.openstreetmap.de/isochrone?json=" + encodeURIComponent(JSON.stringify(q)));
+  if (!r.ok) throw new Error("Valhalla " + r.status);
+  const g = await r.json();
+  const vrstvy = casy.map(t => ({t, geom: g.features.find(f => Math.round(f.properties.contour) === t)?.geometry})).filter(x => x.geom);
+  const out = new Map();
+  for (const b of DATA.byty) if (b.lat != null) out.set(b.id, vrstvy.find(v => vPolygonu(b.lon, b.lat, v.geom))?.t ?? null);
+  return {min: out, oblast: vrstvy.at(-1)?.geom || null};
+}
+async function spocitejDojezd() {
+  const klic = dojKlic(); DOJ.pocita = klic;
+  try {
+    if (S.doj === "mhd") { const m = await nactiMhd(); Object.assign(DOJ, {min: mhdMinuty(m, S.bod), oblast: null, den: m.den, chyba: ""}); }
+    else Object.assign(DOJ, await autoMinuty(S.bod, S.min), {chyba: ""});
+  } catch (ex) {
+    console.error(ex);
+    Object.assign(DOJ, {min: new Map(), oblast: null, chyba: "Dojezd se nepodařilo spočítat – zkuste to za chvíli, zatím se nefiltruje."});
+  }
+  if (DOJ.pocita !== klic) return;          // mezitím se změnilo místo nebo režim
+  DOJ.klic = klic; DOJ.pocita = "";
+  render();
+}
+
 // -------------------------------------------------------------- místo --
 function nastavBod(lat, lon, nazev) {
   S.bod = {lat, lon, nazev}; $("#bodQ").value = nazev === "bod z mapy" ? "" : nazev;
@@ -998,7 +1117,10 @@ let casovac;
 const zpozdene = fn => (...a) => { clearTimeout(casovac); casovac = setTimeout(() => fn(...a), 120); };
 $("#cena").oninput = e => { S.cena = +e.target.value; $("#cenaV").textContent = S.cena >= CENA_MAX ? "bez limitu" : kc(S.cena); zpozdene(render)(); };
 $("#plocha").oninput = e => { S.plocha = +e.target.value; zpozdene(render)(); };
-$("#km").oninput = e => { S.km = +e.target.value; zpozdene(render)(); };
+$("#km").oninput = e => { if (S.doj === "km") S.km = +e.target.value; else S.min = +e.target.value;
+  $("#kmV").textContent = S.doj === "km" ? num(S.km) + " km" : S.min + " min"; zpozdene(render)(); };
+$("#doj").onclick = e => { const t = e.target.closest("[data-doj]"); if (!t) return;
+  S.doj = t.dataset.doj; if (S.bod && S.sort === "cena" && !S._sortRucne) S.sort = "km"; render(); };
 $$("[data-osob]").forEach(b => b.onclick = () => { S.osob = Math.min(8, Math.max(1, S.osob + +b.dataset.osob)); render(); });
 $$("[data-c]").forEach(c => c.onchange = () => {
   S[c.dataset.c] = c.checked;

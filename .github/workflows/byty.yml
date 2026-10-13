@@ -42,7 +42,10 @@ jobs:
             git show origin/data:byty.db > byty.db
             git show origin/data:byty.json > web/byty.json
             git show origin/data:hlidani.json > hlidani.json 2>/dev/null || rm -f hlidani.json
+            git show origin/data:mhd.bin > web/mhd.bin 2>/dev/null || rm -f web/mhd.bin
           fi
+      - name: Jízdní řády MHD
+        run: python -X utf8 mhd.py || echo "MHD se nepodařilo obnovit, zůstává předchozí"
       - name: Stáhnout byty
         if: github.event_name != 'push'
         run: python -X utf8 hledej_byty.py
@@ -54,6 +57,7 @@ jobs:
           d=$(mktemp -d)
           cp byty.db web/byty.json "$d"
           if [ -f hlidani.json ]; then cp hlidani.json "$d"; fi
+          if [ -f web/mhd.bin ]; then cp web/mhd.bin "$d"; fi
           cd "$d"
           git init -q -b data
           git config user.name "github-actions[bot]"

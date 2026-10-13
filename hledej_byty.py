@@ -27,7 +27,7 @@ from urllib3.util.retry import Retry
 
 # ---------------------------------------------------------------- NASTAVENÍ --
 PAUZA_S = 0.7                # pauza mezi požadavky na detail (šetrnost k webům)
-DETAIL_V = 3                 # verze rozboru detailu; zvýšení = znovu stáhnout detaily
+DETAIL_V = 4                 # verze rozboru detailu; zvýšení = znovu stáhnout detaily
 LIMIT = int(os.environ.get("BYTY_LIMIT") or 0) or None
 KURZ_EUR = 25.0              # Kč za euro; při startu se načte aktuální kurz ČNB
 
@@ -271,6 +271,7 @@ def sreality(s, zname):
                     vytah=ano_ne(nazev_z(dt.get("elevator"))) if ano_ne(nazev_z(dt.get("elevator"))) is not None
                     else rb.get("vytah"),
                     venku=bool(dt.get("balcony") or dt.get("loggia") or dt.get("terrace")) or rb.get("venku"),
+                    garaz=bool(dt.get("garage")), parkovani=bool(dt.get("parking_lots")),
                     detail_v=DETAIL_V,
                     **odhad_poplatku(b["cena"], pozn, popis),
                 )
@@ -285,7 +286,7 @@ BZ_QUERY = """query($offset:Int){ listAdverts(offerType:[PRONAJEM], estateType:[
   regionOsmIds:["R435514"], currency:CZK, limit:60, offset:$offset, order:TIMEORDER_DESC){
   totalCount list{ id uri disposition surface price charges deposit etage equipped availableFrom
   timeActivated gps{lat lng} address(locale:CS) roommate reserved description lift petFriendly
-  balconySurface terraceSurface loggiaSurface shortTerm originalPrice currency } } }"""
+  balconySurface terraceSurface loggiaSurface shortTerm originalPrice currency parking garage } } }"""
 
 VYBAVENI_BZ = {"VYBAVENY": True, "CASTECNE": "částečně", "NEVYBAVENY": False}
 
@@ -326,6 +327,7 @@ def bezrealitky(s, zname):
                 kratkodobe=True if a.get("shortTerm") else rb.get("kratkodobe"),
                 provize=False,
                 vytah=True if a.get("lift") else rb.get("vytah"),
+                garaz=bool(a.get("garage")), parkovani=bool(a.get("parking")),
                 venku=bool(a.get("balconySurface") or a.get("terraceSurface") or a.get("loggiaSurface"))
                 or rb.get("venku"),
                 cena_puvodni=kc(a.get("originalPrice")) if (a.get("originalPrice") or 0) > (a.get("price") or 0)
@@ -414,7 +416,7 @@ def bazos(s, zname):
 SLOUPCE = ["zdroj", "url", "nazev", "dispozice", "cena", "popl", "popl_os", "popl_info", "plocha", "adresa",
            "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "vlozeno", "rk", "provize",
            "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano", "detail_v",
-           "mena", "cena_mena"]
+           "mena", "cena_mena", "garaz", "parkovani"]
 STARE_SLOUPCE = ["km", "pozn_cena", "varovani", "popis", "poplatky"]   # z verze 1, už se nepoužívají
 
 
@@ -463,7 +465,7 @@ def uloz(db, byty, beh):
 WEB_POLE = ["id", "zdroj", "url", "nazev", "dispozice", "cena", "popl", "popl_os", "popl_info", "plocha", "adresa",
             "lat", "lon", "metro_m", "patro", "vybaveni", "kauce", "od", "vlozeno", "rk", "provize",
             "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku", "rezervovano",
-            "cena_puvodni", "prvni_videni", "mena", "cena_mena"]
+            "cena_puvodni", "prvni_videni", "mena", "cena_mena", "garaz", "parkovani"]
 PORADI_ZDROJU = {"Bezrealitky": 0, "Sreality": 1, "Bazoš": 2}   # u duplicit vyhrává ten s nejvíc údaji
 
 
@@ -537,12 +539,51 @@ def cena_vuci_okoli(byty, okruh_km=1.5, min_vzorek=6):
         del b["_m2"], b["_bunka"]
 
 
-def uloz_web(db, beh):
+# ------------------------------------------------------- PLACENÉ PARKOVÁNÍ --
+ZPS = "https://gs-pub.praha.eu/arcgis/rest/services/dop/zony_placeneho_stani/MapServer/10/query"
+ZONA_M = 150     # úsek zóny do 150 m od domu = parkuje se tu v zóně
+
+
+def nacti_zony(s):
+    """Úseky zón placeného stání (IPR Praha): [(lat, lon, RES|MIX|VIS)], středy úseků."""
+    useky, offset = [], 0
+    while True:
+        r = s.get(ZPS, timeout=60, params=dict(where="1=1", outFields="CATEGORY", returnGeometry="true",
+                                                 outSR=4326, f="geojson", resultOffset=offset, resultRecordCount=1000))
+        r.raise_for_status()
+        f = r.json().get("features") or []
+        for x in f:
+            g = x.get("geometry") or {}
+            body = [p for kruh in (g.get("coordinates") or []) for p in kruh] if g.get("type") == "Polygon" else \
+                   [p for poly in (g.get("coordinates") or []) for kruh in poly for p in kruh]
+            if body:
+                useky.append((sum(p[1] for p in body) / len(body), sum(p[0] for p in body) / len(body),
+                              (x.get("properties") or {}).get("CATEGORY")))
+        if len(f) < 1000:
+            return useky
+        offset += len(f)
+
+
+def zona_parkovani(byty, useky):
+    """Modrá (rezidentní/smíšená) zóna, placená (jen návštěvnická), nebo bez zóny = na ulici zdarma."""
+    mriz = {}
+    for la, lo, k in useky:
+        mriz.setdefault((int(la / 0.002), int(lo / 0.003)), []).append((la, lo, k))
+    for b in byty:
+        if b.get("lat") is None:
+            continue
+        bx, by = int(b["lat"] / 0.002), int(b["lon"] / 0.003)
+        kat = {k for dx in (-1, 0, 1) for dy in (-1, 0, 1) for la, lo, k in mriz.get((bx + dx, by + dy), ())
+               if km(b, {"lat": la, "lon": lo}) * 1000 <= ZONA_M}
+        b["zona"] = "modra" if kat & {"RES", "MIX"} else "placena" if kat else "zdarma"
+
+
+def uloz_web(db, beh, useky=None):
     byty = []
     for r in db.execute("SELECT * FROM byty WHERE aktivni=1 AND cena BETWEEN 3000 AND 500000"):
         b = {k: cislo(r[k]) for k in WEB_POLE}
         for k in ("rk", "provize", "koureni", "max2", "pro_par", "zvirata", "kratkodobe", "vytah", "venku",
-                  "rezervovano", "popl_os"):
+                  "rezervovano", "popl_os", "garaz", "parkovani"):
             if b[k] is not None:
                 b[k] = bool(b[k])
         if b["popl"] == 0:                  # 0 = nevyplněno (starší záznamy z Bezrealitek)
@@ -552,6 +593,8 @@ def uloz_web(db, beh):
         byty.append(b)
     byty = sluc_duplicity(byty)
     cena_vuci_okoli(byty)
+    if useky:
+        zona_parkovani(byty, useky)
     # Vynechat prázdné hodnoty; False nechat jen tam, kde nese informaci ("zákaz", "bez výtahu"…).
     tri_stav = {"koureni", "zvirata", "provize", "vytah", "rk", "vybaveni"}
     byty = [{k: v for k, v in b.items() if v not in (None, "") and (v is not False or k in tri_stav)}
@@ -583,7 +626,13 @@ def main():
             db.rollback()
             log(f"{nazev}: CHYBA {type(ex).__name__}: {ex}")
     db.execute("VACUUM")
-    byty = uloz_web(db, beh)
+    try:
+        useky = nacti_zony(s)
+        log(f"Placené zóny: {len(useky)} úseků")
+    except Exception as ex:  # noqa: BLE001
+        useky = None
+        log(f"Placené zóny: CHYBA {type(ex).__name__}: {ex}")
+    byty = uloz_web(db, beh, useky)
     log(f"Web: {WEB_JSON}  ({len(byty)} bytů po sloučení duplicit)")
     try:
         import hlidani

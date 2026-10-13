@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import struct
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -40,7 +41,8 @@ def filtry(odkaz):
         plocha=cislo("p", 0), bod=bod, km=cislo("k", 5), q=q.get("q", "").lower(),
         kourim=ano("ko"), zvire=ano("zv"), venku=ano("ve"), vytah=ano("vy"), vybaveny=ano("vb"),
         nevybaveny=ano("nv"), bezrk=ano("rk"), bezprov=ano("pr"), od=q.get("od", ""), znamePopl=ano("zp"),
-        kratke=ano("kr"), rezerv=ano("re"),
+        kratke=ano("kr"), rezerv=ano("re"), park=ano("pk"),
+        doj=q.get("dj") if q.get("dj") in ("auto", "mhd") else "km", min=cislo("mi", 30),
     )
 
 
@@ -76,7 +78,13 @@ def odpovida(b, f, popl_m2, popl_med):
         return False
     if f["plocha"] and (b.get("plocha") or 0) < f["plocha"]:
         return False
-    if f["bod"] and b.get("lat") is not None and vzdalenost(f["bod"], b) > f["km"]:
+    if f["bod"] and f["doj"] == "km" and b.get("lat") is not None and vzdalenost(f["bod"], b) > f["km"]:
+        return False
+    if f.get("_min") is not None and b.get("lat") is not None:          # dojezd autem / MHD
+        m = f["_min"].get(b["id"])
+        if m is None or m > f["min"]:
+            return False
+    if f["park"] and not (b.get("garaz") or b.get("parkovani") or b.get("zona") == "zdarma"):
         return False
     if f["q"] and f["q"] not in (b.get("adresa") or "").lower():
         return False
@@ -92,6 +100,92 @@ def odpovida(b, f, popl_m2, popl_med):
         return False
     b["_celkem"], b["_odhad"] = celkem, odhad
     return True
+
+
+# ------------------------------------------------------------------ dojezd --
+# Stejný výpočet jako web (spocitejDojezd): MHD z web/mhd.bin, auto z izochrony Valhally.
+MHD_BIN = Path(__file__).resolve().parent / "web" / "mhd.bin"
+S_ZA_M = 0.9
+
+
+def metry(la1, lo1, la2, lo2):
+    return math.hypot((la1 - la2) * 111320, (lo1 - lo2) * 111320 * math.cos(la1 * math.pi / 180))
+
+
+def mhd_minuty(byty, bod):
+    data = MHD_BIN.read_bytes()
+    _, n, c, f, _ = struct.unpack_from("<5I", data)
+    o = 20
+    zast = struct.unpack_from(f"<{2 * n}i", data, o); o += 8 * n
+    zac = struct.unpack_from(f"<{n + 1}I", data, o); o += 4 * (n + 1)
+    spoje = struct.unpack_from(f"<{6 * c}H", data, o); o += 12 * c
+    chuze = struct.unpack_from(f"<{2 * f}H", data, o)
+    T, L = 7200, [-math.inf] * n
+    lat = [zast[2 * i] / 1e5 for i in range(n)]
+    lon = [zast[2 * i + 1] / 1e5 for i in range(n)]
+
+    def chuze_z(i):
+        for k in range(zac[i], zac[i + 1]):
+            t, v = chuze[2 * k], L[i] - chuze[2 * k + 1]
+            if v > L[t]:
+                L[t] = v
+    for i in range(n):
+        d = metry(lat[i], lon[i], *bod)
+        if d <= 1500:
+            L[i] = T - d * S_ZA_M
+    for i in range(n):
+        if L[i] > -math.inf:
+            chuze_z(i)
+    jede = set()
+    for i in range(c):
+        z, kam, j, odj, pri = spoje[6 * i:6 * i + 5]
+        if pri > T:
+            continue
+        if j in jede or L[kam] >= pri:
+            jede.add(j)
+            if odj > L[z]:
+                L[z] = odj
+                chuze_z(z)
+    mriz = {}
+    for i in range(n):
+        mriz.setdefault((zast[2 * i] // 1000, zast[2 * i + 1] // 1500), []).append(i)
+    out = {}
+    for b in byty:
+        if b.get("lat") is None:
+            continue
+        nej = T - metry(b["lat"], b["lon"], *bod) * S_ZA_M
+        bx, by = math.floor(b["lat"] * 100), math.floor(b["lon"] * 1e5 / 1500)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for i in mriz.get((bx + dx, by + dy), ()):
+                    if L[i] > -math.inf:
+                        d = metry(b["lat"], b["lon"], lat[i], lon[i])
+                        if d <= 1200:
+                            nej = max(nej, L[i] - d * S_ZA_M)
+        m = round((T - nej) / 60)
+        out[b["id"]] = max(m, 1) if m <= 120 else None
+    return out
+
+
+def v_polygonu(lon, lat, geom):
+    poly = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
+
+    def v_kruhu(k):
+        v, j = False, len(k) - 1
+        for i in range(len(k)):
+            if (k[i][1] > lat) != (k[j][1] > lat) and lon < (k[j][0] - k[i][0]) * (lat - k[i][1]) / (k[j][1] - k[i][1]) + k[i][0]:
+                v = not v
+            j = i
+        return v
+    return any(v_kruhu(p[0]) and not any(v_kruhu(d) for d in p[1:]) for p in poly)
+
+
+def auto_minuty(s, byty, bod, mx):
+    q = dict(locations=[dict(lat=bod[0], lon=bod[1])], costing="auto", contours=[dict(time=mx)], polygons=True)
+    r = s.get("https://valhalla1.openstreetmap.de/isochrone", params={"json": json.dumps(q, separators=(",", ":"))}, timeout=60)
+    r.raise_for_status()
+    geom = r.json()["features"][0]["geometry"]
+    return {b["id"]: (mx if v_polygonu(b["lon"], b["lat"], geom) else None) for b in byty if b.get("lat") is not None}
 
 
 # ------------------------------------------------------------------ GitHub --
@@ -155,9 +249,11 @@ def spust(byty, s, log):
     novy_stav = {}
     for h in hl:
         f = filtry(h["odkaz"])
-        shoda = [b for b in byty if odpovida(b, f, popl_m2, popl_med)]
         drive = stav.get(h["cislo"])
         try:
+            if f["bod"] and f["doj"] != "km":   # když výpočet selže, hledání se tentokrát přeskočí (výjimka níž)
+                f["_min"] = mhd_minuty(byty, f["bod"]) if f["doj"] == "mhd" else auto_minuty(s, byty, f["bod"], int(f["min"]))
+            shoda = [b for b in byty if odpovida(b, f, popl_m2, popl_med)]
             if drive is None or drive.get("odkaz") != h["odkaz"] or drive.get("tema") != h["tema"]:
                 posli(s, h, shoda, uvod=f"Teď hledání odpovídá {len(shoda)} bytů. "
                                         "Nové ti pošlu, jakmile se objeví.")

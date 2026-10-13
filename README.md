@@ -14,7 +14,8 @@ Autor: [Tuzik727](https://github.com/Tuzik727)
   - jestli je tam balkon nebo terasa a výtah,
   - jestli je to bez realitky a bez provize,
   - kdy se dá nastěhovat,
-  - jak daleko je to od místa, který si vybereš.
+  - jak dlouho to trvá do místa, který si vybereš: vzdušnou čarou, **autem** nebo **MHD** (ráno ve všední den podle jízdního řádu PID),
+  - jestli je kde parkovat: garáž, stání, nebo ulice bez placený zóny.
 
   A web ti vždycky řekne, co a proč skryl, nic nezmizí potichu.
 - **Je to levný, nebo drahý?** U každýho bytu vidíš, jak je na tom cenou proti bytům okolo. Podezřele levný věci jsou označený.
@@ -42,6 +43,8 @@ Celý to jede zdarma na GitHubu, žádnej server.
 - GitHub Actions zhruba každou půlhodinu stáhne nový nabídky. GitHub to někdy zpozdí nebo vynechá, to je daň za zadarmo.
 - Data leží ve větvi `data`.
 - Web je jeden HTML soubor na GitHub Pages.
+- Dojezd MHD počítá prohlížeč z jízdních řádů PID (`mhd.py` z nich udělá malej soubor), dojezd autem dává [Valhalla](https://valhalla1.openstreetmap.de) z OpenStreetMap (bez zácp).
+- Placený zóny jsou z otevřených dat IPR Praha.
 - Popisy inzerátů neukládám. Vytáhnu z nich jen to důležitý: poplatky, kouření, zvířata, provizi…
 
 ## Spuštění u sebe
@@ -59,6 +62,7 @@ Na rychlej test nastav `BYTY_LIMIT=50`. Stáhne se jen pár inzerátů z každý
 | Soubor | Co dělá |
 |---|---|
 | `hledej_byty.py` | stahuje byty, čte z popisů, slučuje duplicity, počítá cenu proti okolí |
+| `mhd.py` | jízdní řády PID → `web/mhd.bin` pro dojezd MHD |
 | `hlidani.py` | posílá notifikace o nových bytech |
 | `web/index.html` | celej web |
 | `.github/workflows/byty.yml` | pravidelný stahování a nasazení webu |
