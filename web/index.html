@@ -48,7 +48,8 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:12px;flex-wrap:wrap;
 h1{font-size:16px;font-weight:650;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
 h1 .logo{width:22px;height:22px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:13px}
 .sub{color:var(--muted);font-size:13px}
-.theme{margin-left:auto}
+.autor{margin-left:auto;color:var(--muted);font-size:13px;text-decoration:none}
+.autor:hover{color:var(--text)}
 aside{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:0 6px 24px 0;scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
 .res{min-width:0;padding-bottom:48px}
 #mapbox{position:sticky;top:12px;align-self:start;height:calc(100vh - 24px)}
@@ -171,6 +172,7 @@ kbd{background:var(--soft);border:1px solid var(--line2);border-bottom-width:2px
   <header>
     <h1><span class="logo" aria-hidden="true">⌂</span>Byty k pronájmu · Praha</h1>
     <span class="sub" id="sub">Načítám…</span>
+    <a class="autor" href="https://github.com/Tuzik727" target="_blank" rel="noopener">Autor: Tuzik727</a>
     <button class="btn theme" id="tema" aria-label="Přepnout světlý / tmavý režim"></button>
   </header>
 
